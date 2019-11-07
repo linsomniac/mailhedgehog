@@ -12,7 +12,7 @@ RUN rm -f requirements.txt
 
 COPY --chown=mailhedgehog:mailhedgehog static static
 COPY --chown=mailhedgehog:mailhedgehog templates templates
-COPY --chown=mailhedgehog:mailhedgehog mailhedgehog mailhedgehog
+COPY --chown=mailhedgehog:mailhedgehog mailhedgehog mail.py ./
 RUN chmod a+x mailhedgehog
 
 EXPOSE 1025 8025

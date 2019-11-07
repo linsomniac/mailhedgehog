@@ -9,11 +9,7 @@ import asyncio
 from aiosmtpd.smtp import SMTP
 from functools import partial, wraps
 from collections import deque
-from email import message_from_bytes, message_from_string
-from email.utils import parseaddr
-import time
-import datetime
-from uuid import uuid4
+from mail import format_message
 
 ConfigMaxMessages = 100
 ConfigSmtpPort = 1025
@@ -28,44 +24,6 @@ connected_websockets = set()
 global_messages = deque(maxlen=ConfigMaxMessages)
 
 app = Quart(__name__)
-
-
-def format_message(session, envelope):
-    def iso_time():
-        utc_offset_sec = time.altzone if time.localtime().tm_isdst else time.timezone
-        utc_offset = datetime.timedelta(seconds=-utc_offset_sec)
-        return datetime.datetime.now().replace(
-            tzinfo=datetime.timezone(offset=utc_offset)).isoformat()
-
-    def format_address(addr):
-        realname, email = parseaddr(addr)
-        lhs, rhs = email.split('@')
-        return {
-            'Domain': rhs,
-            'Mailbox': lhs,
-            'Params': '',
-            'Relays': None,
-        }
-
-    data = message_from_bytes(envelope.content)
-    return {
-        'Content': {
-            'Headers': dict({x:[y] for (x,y) in data.items()}),
-            'Body': data.get_payload(),
-            'MIME': None,
-            'Size': len(envelope.content),
-            },
-        'Created': iso_time(),
-        'From': format_address(data['From']),
-        'ID': str(uuid4()) + '@mailweasel.example',
-        'To': [format_address(data['To'])],
-        'Raw': {
-            'Data': envelope.content.decode(),
-            'From': envelope.mail_from,
-            'To': envelope.rcpt_tos,
-            'Helo': session.host_name,
-        }
-    }
 
 
 @app.before_serving
