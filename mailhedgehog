@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 from quart import (
-    Quart, jsonify, make_push_promise,
-    url_for, websocket)
+    Quart, make_push_promise, url_for, websocket)
+from pathlib import Path
 from quart.json import dumps
 from quart.exceptions import NotFound
 import asyncio
@@ -79,8 +79,15 @@ async def startup():
             return '250 OK'
 
     loop = asyncio.get_event_loop()
-    loop.create_task(loop.create_server(
-        partial(SMTP, SmtpHandler()), port=ConfigSmtpPort))
+    app.smtp_server = loop.create_server(
+        partial(SMTP, SmtpHandler()), port=ConfigSmtpPort)
+    loop.create_task(app.smtp_server)
+
+
+@app.after_serving
+async def cleanup():
+    app.smtp_server.close()
+
 
 @app.route('/')
 async def index():
@@ -90,17 +97,17 @@ async def index():
     await make_push_promise(url_for('static', filename='images/hog.png'))
     await make_push_promise(url_for('static', filename='images/github.png'))
     await make_push_promise(url_for('static', filename='css/style.css'))
-    return open('templates/index.html', 'r').read()
+    return Path('templates/index.html').read_text()
 
 
 @app.route('/api/v2/messages', methods=['GET'])
 async def messages():
-    return jsonify({
+    return {
         'count': len(global_messages),
         'start': 0,
         'total': len(global_messages),
         'items': list(global_messages),
-        })
+        }
 
 
 @app.route('/api/v1/messages', methods=['DELETE'])
@@ -113,7 +120,7 @@ async def delete_all_messages():
 async def message(msgid):
     for m in global_messages:
         if m['ID'] == msgid:
-            return jsonify(m)
+            return m
 
     raise NotFound()
 
