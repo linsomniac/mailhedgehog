@@ -74,8 +74,8 @@ async def startup():
         async def handle_DATA(self, server, session, envelope):
             message = format_message(session, envelope)
             global_messages.appendleft(message)
-            for ws in connected_websockets:
-                await ws.send(dumps(message))
+            for queue in connected_websockets:
+                await queue.put(dumps(message))
             return '250 OK'
 
     loop = asyncio.get_event_loop()
@@ -129,20 +129,21 @@ def collect_websocket(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         global connected_websockets
-        connected_websockets.add(websocket._get_current_object())
+        queue = asyncio.Queue()
+        connected_websockets.add(queue)
         try:
-            return await func(*args, **kwargs)
+            return await func(queue, *args, **kwargs)
         finally:
-            connected_websockets.remove(websocket._get_current_object())
+            connected_websockets.remove(queue)
     return wrapper
 
 
 @app.websocket('/api/v2/websocket')
 @collect_websocket
-async def ws():
+async def ws(queue):
     while True:
-        data = await websocket.receive()
-        print(f'Websocket: {data}')
+        data = await queue.get()
+        await websocket.send(data)
 
 
 app.run(
