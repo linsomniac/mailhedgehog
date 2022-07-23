@@ -1,4 +1,4 @@
-FROM python:3.7-alpine
+FROM python:3.10-alpine
 
 RUN adduser -D mailhedgehog
 WORKDIR /home/mailhedgehog

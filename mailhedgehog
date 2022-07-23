@@ -4,7 +4,7 @@ from quart import (
     Quart, make_push_promise, url_for, websocket)
 from pathlib import Path
 from quart.json import dumps
-from quart.exceptions import NotFound
+from werkzeug.exceptions import NotFound
 import asyncio
 from aiosmtpd.smtp import SMTP
 from functools import partial, wraps
@@ -27,7 +27,7 @@ app = Quart(__name__)
 
 
 @app.before_serving
-async def startup():
+async def startup() -> None:
     class SmtpHandler:
         async def handle_DATA(self, server, session, envelope):
             message = format_message(session, envelope)
@@ -43,12 +43,12 @@ async def startup():
 
 
 @app.after_serving
-async def cleanup():
+async def cleanup() -> None:
     app.smtp_server.close()
 
 
 @app.route('/')
-async def index():
+async def index() -> str:
     #  Needs certfile and keyfile
     await make_push_promise(url_for('static', filename='js/controllers.js'))
     await make_push_promise(url_for('static', filename='js/strutil.js'))
@@ -59,7 +59,7 @@ async def index():
 
 
 @app.route('/api/v2/messages', methods=['GET'])
-async def messages():
+async def messages() -> dict:
     return {
         'count': len(global_messages),
         'start': 0,
@@ -69,13 +69,13 @@ async def messages():
 
 
 @app.route('/api/v1/messages', methods=['DELETE'])
-async def delete_all_messages():
+async def delete_all_messages() -> str:
     global_messages.clear()
     return 'OK'
 
 
 @app.route('/api/v1/messages/<msgid>', methods=['GET'])
-async def message(msgid):
+async def message(msgid: str) -> deque:
     for m in global_messages:
         if m['ID'] == msgid:
             return m
