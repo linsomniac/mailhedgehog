@@ -145,6 +145,11 @@ def create_app(config: Config, store: MessageStore) -> Quart:
 
     @app.websocket("/api/v2/websocket")
     async def ws() -> None:
+        # AIDEV-NOTE: accept up front so the HTTP 101 handshake completes
+        # immediately. Quart otherwise defers accept() until the first send(),
+        # which never runs while the queue is empty -- leaving the browser stuck
+        # showing "Disconnected" until the first email arrives.
+        await websocket.accept()
         queue = broadcaster.register()
         try:
             while True:

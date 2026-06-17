@@ -39,6 +39,21 @@ def app_and_store():
     return create_app(config, store), store
 
 
+async def test_websocket_accepts_before_any_broadcast(app_and_store):
+    # AIDEV-NOTE: regression for "Disconnected" UI bug. Quart only sends the
+    # websocket.accept (HTTP 101) handshake on the first send()/receive() or an
+    # explicit accept(). The handler must accept up front; otherwise it blocks on
+    # an empty queue and the browser never sees the connection open.
+    app, _ = app_and_store
+    client = app.test_client()
+    async with client.websocket("/api/v2/websocket") as ws:
+        for _ in range(100):
+            if ws.accepted:
+                break
+            await asyncio.sleep(0.01)
+        assert ws.accepted, "handler must accept the websocket before any broadcast"
+
+
 async def test_websocket_receives_broadcast(app_and_store):
     app, _ = app_and_store
     client = app.test_client()
