@@ -34,6 +34,7 @@ Using Python 3 / uv:
 * Web UI for viewing received messages.
 * JSON/WebSocket API compatible with the original MailHog.
 * asyncio Python 3 app built on [Quart](https://quart.palletsprojects.com/).
+* Served in production by [Hypercorn](https://hypercorn.readthedocs.io/) with WebSocket keepalive pings.
 * Can run as a Docker container.
 
 ### Anti-features
