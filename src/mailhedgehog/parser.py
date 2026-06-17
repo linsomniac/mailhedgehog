@@ -72,6 +72,53 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat()
 
 
+# AIDEV-NOTE: A "part" mirrors the shape of Content {Headers, Body, Size, MIME}.
+# Bodies are left in their raw on-the-wire (transfer-encoded) form on purpose —
+# the frontend (strutil.js) decodes base64/quoted-printable/charset itself.
+def _part_dict(part: EmailMessage) -> Message:
+    if part.is_multipart():
+        return {
+            "Headers": extract_headers(part),
+            "Body": "",
+            "Size": 0,
+            "MIME": _mime_tree(part),
+        }
+    payload = part.get_payload(decode=False)
+    decoded = part.get_payload(decode=True) or b""
+    return {
+        "Headers": extract_headers(part),
+        "Body": safe_str(payload if isinstance(payload, (str, bytes)) else ""),
+        "Size": len(decoded),
+        "MIME": None,
+    }
+
+
+def _mime_tree(msg: EmailMessage) -> Message:
+    children = msg.get_payload()
+    parts = (
+        [p for p in children if isinstance(p, EmailMessage)]
+        if isinstance(children, list)
+        else []
+    )
+    return {"Parts": [_part_dict(p) for p in parts]}
+
+
+def get_mime_part(raw: bytes, index: int) -> tuple[bytes, str, str | None] | None:
+    msg = message_from_bytes(raw)
+    if not msg.is_multipart():
+        return None
+    payload = msg.get_payload()
+    if not isinstance(payload, list) or index < 0 or index >= len(payload):
+        return None
+    part = payload[index]
+    if not isinstance(part, EmailMessage):
+        return None
+    content = part.get_payload(decode=True) or b""
+    if not isinstance(content, bytes):
+        return None
+    return content, part.get_content_type(), part.get_filename()
+
+
 def parse(raw: bytes, mail_from: str, rcpt_tos: list[str], helo: str | None) -> Message:
     msg = message_from_bytes(raw)
     body_bytes = _split_body(raw)
@@ -86,7 +133,7 @@ def parse(raw: bytes, mail_from: str, rcpt_tos: list[str], helo: str | None) -> 
             "Size": len(body_bytes),
             "MIME": None,
         },
-        "MIME": None,  # populated for multipart in Task 5
+        "MIME": _mime_tree(msg) if msg.is_multipart() else None,
         "Raw": {
             "From": safe_str(mail_from),
             "To": [safe_str(r) for r in rcpt_tos],
