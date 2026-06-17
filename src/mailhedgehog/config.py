@@ -41,6 +41,24 @@ class Config:
     tls_cert: str | None = None
     tls_key: str | None = None
 
+    def __post_init__(self) -> None:
+        # AIDEV-NOTE: These four knobs are the memory-safety bounds. A
+        # non-positive value silently defeats them (asyncio.Queue(maxsize<=0)
+        # is unbounded; max_messages<=0 breaks/empties store eviction), so
+        # reject them at construction time rather than failing obscurely at
+        # runtime. Ports are intentionally NOT validated (0 = OS-assigned).
+        caps = {
+            "max_messages": self.max_messages,
+            "max_bytes": self.max_bytes,
+            "max_message_size": self.max_message_size,
+            "ws_queue_size": self.ws_queue_size,
+        }
+        for name, value in caps.items():
+            if value < 1:
+                raise ValueError(
+                    f"{name} must be a positive integer (>= 1), got {value}"
+                )
+
     @classmethod
     def from_env(cls) -> Config:
         return cls(

@@ -49,3 +49,38 @@ def test_invalid_int_raises(monkeypatch):
     monkeypatch.setenv("MH_SMTP_PORT", "notanumber")
     with pytest.raises(ValueError):
         Config.from_env()
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+@pytest.mark.parametrize(
+    "name",
+    ["MH_MAX_MESSAGES", "MH_MAX_BYTES", "MH_MAX_MESSAGE_SIZE", "MH_WS_QUEUE_SIZE"],
+)
+def test_nonpositive_memory_caps_rejected(monkeypatch, name, value):
+    # These knobs are the memory-safety bounds; 0/negative would disable the
+    # websocket queue bound or break store eviction, so they must fail fast.
+    monkeypatch.setenv(name, value)
+    field = name[3:].lower()  # MH_MAX_MESSAGES -> max_messages
+    with pytest.raises(ValueError, match=field):
+        Config.from_env()
+
+
+def test_minimum_valid_caps_accepted(monkeypatch):
+    for name in (
+        "MH_MAX_MESSAGES",
+        "MH_MAX_BYTES",
+        "MH_MAX_MESSAGE_SIZE",
+        "MH_WS_QUEUE_SIZE",
+    ):
+        monkeypatch.setenv(name, "1")
+    cfg = Config.from_env()
+    assert cfg.max_messages == 1
+    assert cfg.max_bytes == 1
+    assert cfg.max_message_size == 1
+    assert cfg.ws_queue_size == 1
+
+
+def test_direct_construction_rejects_nonpositive_cap():
+    # The invariant lives on Config, so it holds for direct construction too.
+    with pytest.raises(ValueError, match="max_messages"):
+        Config(max_messages=0)
