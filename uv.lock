@@ -359,7 +359,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosmtpd" },
-    { name = "quart", specifier = ">=0.17" },
+    { name = "quart", specifier = ">=0.20" },
 ]
 
 [package.metadata.requires-dev]
