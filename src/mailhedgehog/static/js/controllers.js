@@ -173,7 +173,7 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
     var options = {
       body: $scope.tryDecodeMime((message.Content.Headers["Subject"] || [])[0]),
       tag: "MailHog",
-      icon: "images/hog.png"
+      icon: "static/images/icon-128.png"
     };
     var notification = new Notification(title, options);
     notification.addEventListener('click', function(e) {

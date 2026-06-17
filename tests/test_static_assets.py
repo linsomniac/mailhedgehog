@@ -53,3 +53,22 @@ async def test_png_served_with_correct_size(app, name, size):
     assert "image/png" in resp.content_type
     image = Image.open(BytesIO(await resp.get_data()))
     assert image.size == (size, size)
+
+
+async def test_index_references_new_icons_not_pig(app):
+    body = await (await app.test_client().get("/")).get_data(as_text=True)
+    assert "static/images/icon.svg" in body
+    assert "static/images/apple-touch-icon.png" in body
+    assert "static/images/favicon-32.png" in body
+    assert "static/images/favicon-16.png" in body
+    assert "hog.png" not in body
+
+
+def test_controllers_js_references_notification_icon_not_pig():
+    js = (_IMAGES.parent / "js" / "controllers.js").read_text()
+    assert "static/images/icon-128.png" in js
+    assert "hog.png" not in js
+
+
+def test_old_pig_asset_is_gone():
+    assert not (_IMAGES / "hog.png").exists()
