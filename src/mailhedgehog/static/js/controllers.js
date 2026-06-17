@@ -121,14 +121,43 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
     $scope.refresh();
   }
 
+  // AIDEV-NOTE: websocket auto-reconnect. hasEventSource (the Connected/
+  // Disconnected indicator) drops to false on any close/error; without this the
+  // UI never recovered until a full page reload. Backoff resets only on a real
+  // `open`. wsManuallyClosed suppresses reconnect when the user toggles the
+  // stream off. The `source !== ws` guard stops a stale socket's late
+  // close/error from disturbing a newer connection. The pending-timer guard
+  // makes the error-then-close double fire schedule exactly one reconnect.
+  $scope.wsReconnectBase = 1000;
+  $scope.wsReconnectMax = 30000;
+  $scope.wsReconnectDelay = $scope.wsReconnectBase;
+  $scope.wsManuallyClosed = false;
+  $scope.wsReconnectTimer = null;
+
+  $scope.scheduleReconnect = function() {
+    if ($scope.wsReconnectTimer) { return; }
+    var delay = $scope.wsReconnectDelay;
+    $scope.wsReconnectTimer = $timeout(function() {
+      $scope.wsReconnectTimer = null;
+      $scope.openStream();
+    }, delay);
+    $scope.wsReconnectDelay = Math.min($scope.wsReconnectDelay * 2, $scope.wsReconnectMax);
+  }
+
   $scope.toggleStream = function() {
     $scope.source == null ? $scope.openStream() : $scope.closeStream();
   }
   $scope.openStream = function() {
+    $scope.wsManuallyClosed = false;
+    if ($scope.wsReconnectTimer) {
+      $timeout.cancel($scope.wsReconnectTimer);
+      $scope.wsReconnectTimer = null;
+    }
     var host = $scope.host.replace(/^http/, 'ws') ||
                (location.protocol.replace(/^http/, 'ws') + '//' + location.hostname + (location.port ? ':' + location.port : '') + location.pathname);
-    $scope.source = new WebSocket(host + 'api/v2/websocket');
-    $scope.source.addEventListener('message', function(e) {
+    var ws = new WebSocket(host + 'api/v2/websocket');
+    $scope.source = ws;
+    ws.addEventListener('message', function(e) {
       $scope.$apply(function() {
         $scope.totalMessages++;
         if ($scope.startIndex > 0) {
@@ -149,22 +178,34 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
         }
       });
     }, false);
-    $scope.source.addEventListener('open', function(e) {
+    ws.addEventListener('open', function(e) {
       $scope.$apply(function() {
         $scope.hasEventSource = true;
+        $scope.wsReconnectDelay = $scope.wsReconnectBase;
       });
     }, false);
-    $scope.source.addEventListener('error', function(e) {
-      //if(e.readyState == EventSource.CLOSED) {
-        $scope.$apply(function() {
-          $scope.hasEventSource = false;
-        });
-      //}
-    }, false);
+    var onDrop = function(e) {
+      if ($scope.source !== ws) { return; }
+      $scope.$apply(function() {
+        $scope.hasEventSource = false;
+      });
+      if (!$scope.wsManuallyClosed) {
+        $scope.scheduleReconnect();
+      }
+    };
+    ws.addEventListener('error', onDrop, false);
+    ws.addEventListener('close', onDrop, false);
   }
   $scope.closeStream = function() {
-    $scope.source.close();
-    $scope.source = null;
+    $scope.wsManuallyClosed = true;
+    if ($scope.wsReconnectTimer) {
+      $timeout.cancel($scope.wsReconnectTimer);
+      $scope.wsReconnectTimer = null;
+    }
+    if ($scope.source) {
+      $scope.source.close();
+      $scope.source = null;
+    }
     $scope.hasEventSource = false;
   }
 
