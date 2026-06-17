@@ -119,6 +119,31 @@ def get_mime_part(raw: bytes, index: int) -> tuple[bytes, str, str | None] | Non
     return content, part.get_content_type(), part.get_filename()
 
 
+def unparseable_message(
+    raw: bytes, mail_from: str, rcpt_tos: list[str], helo: str | None, error: str
+) -> Message:
+    """A safe fallback dict for input that could not be parsed at all."""
+    return {
+        "ID": _new_id(),
+        "From": parse_addr(mail_from),
+        "To": [parse_addr(r) for r in rcpt_tos],
+        "Created": _now_iso(),
+        "Content": {
+            "Headers": {"X-MailHedgehog-Error": [safe_str(error)]},
+            "Body": safe_str(raw),
+            "Size": len(raw),
+            "MIME": None,
+        },
+        "MIME": None,
+        "Raw": {
+            "From": safe_str(mail_from),
+            "To": [safe_str(r) for r in rcpt_tos],
+            "Helo": safe_str(helo or ""),
+            "Data": safe_str(raw),
+        },
+    }
+
+
 def parse(raw: bytes, mail_from: str, rcpt_tos: list[str], helo: str | None) -> Message:
     msg = message_from_bytes(raw)
     body_bytes = _split_body(raw)
