@@ -171,7 +171,7 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
   $scope.createNotification = function(message) {
     var title = "Mail from " + $scope.getSender(message);
     var options = {
-      body: $scope.tryDecodeMime(message.Content.Headers["Subject"][0]),
+      body: $scope.tryDecodeMime((message.Content.Headers["Subject"] || [])[0]),
       tag: "MailHog",
       icon: "images/hog.png"
     };
@@ -193,7 +193,7 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
   }
 
   $scope.getSender = function(message) {
-    return $scope.tryDecodeMime($scope.getDisplayName(message.Content.Headers["From"][0]) ||
+    return $scope.tryDecodeMime($scope.getDisplayName((message.Content.Headers["From"] || [])[0]) ||
                                 message.From.Mailbox + "@" + message.From.Domain);
   }
 
