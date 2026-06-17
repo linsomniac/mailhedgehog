@@ -34,6 +34,7 @@ Using Python 3 / uv:
 * Web UI for viewing received messages.
 * JSON/WebSocket API compatible with the original MailHog.
 * asyncio Python 3 app built on [Quart](https://quart.palletsprojects.com/).
+* Served in production by [Hypercorn](https://hypercorn.readthedocs.io/) with WebSocket keepalive pings.
 * Can run as a Docker container.
 
 ### Anti-features
@@ -56,6 +57,7 @@ All settings are controlled via environment variables:
 | `MH_MAX_BYTES`        | `52428800`   | Total storage cap in bytes (default 50 MiB)      |
 | `MH_MAX_MESSAGE_SIZE` | `26214400`   | Per-message size limit in bytes (default 25 MiB) |
 | `MH_WS_QUEUE_SIZE`    | `256`        | WebSocket broadcast queue depth per client       |
+| `MH_WS_PING_INTERVAL` | `20`         | WebSocket keepalive ping interval in seconds (`<= 0` disables) |
 | `MH_DEBUG`            | `false`      | Enable Quart debug mode                          |
 | `MH_TLS_CERT`         | *(unset)*    | Path to TLS certificate file (optional)          |
 | `MH_TLS_KEY`          | *(unset)*    | Path to TLS private key file (optional)          |

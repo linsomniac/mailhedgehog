@@ -84,3 +84,32 @@ def test_direct_construction_rejects_nonpositive_cap():
     # The invariant lives on Config, so it holds for direct construction too.
     with pytest.raises(ValueError, match="max_messages"):
         Config(max_messages=0)
+
+
+def test_ws_ping_interval_default():
+    from mailhedgehog.config import Config
+
+    assert Config().ws_ping_interval == 20.0
+
+
+def test_ws_ping_interval_from_env(monkeypatch):
+    from mailhedgehog.config import Config
+
+    monkeypatch.setenv("MH_WS_PING_INTERVAL", "5.5")
+    assert Config.from_env().ws_ping_interval == 5.5
+
+
+def test_ws_ping_interval_empty_uses_default(monkeypatch):
+    from mailhedgehog.config import Config
+
+    monkeypatch.setenv("MH_WS_PING_INTERVAL", "")
+    assert Config.from_env().ws_ping_interval == 20.0
+
+
+def test_ws_ping_interval_allows_non_positive_to_disable(monkeypatch):
+    # AIDEV-NOTE: <= 0 is intentionally allowed; it disables the heartbeat at
+    # the launcher (maps to hypercorn websocket_ping_interval=None).
+    from mailhedgehog.config import Config
+
+    monkeypatch.setenv("MH_WS_PING_INTERVAL", "0")
+    assert Config.from_env().ws_ping_interval == 0.0

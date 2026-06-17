@@ -1,5 +1,8 @@
 import asyncio
+import base64
 import json
+import os
+import socket
 
 import pytest
 
@@ -39,6 +42,21 @@ def app_and_store():
     return create_app(config, store), store
 
 
+async def test_websocket_accepts_before_any_broadcast(app_and_store):
+    # AIDEV-NOTE: regression for "Disconnected" UI bug. Quart only sends the
+    # websocket.accept (HTTP 101) handshake on the first send()/receive() or an
+    # explicit accept(). The handler must accept up front; otherwise it blocks on
+    # an empty queue and the browser never sees the connection open.
+    app, _ = app_and_store
+    client = app.test_client()
+    async with client.websocket("/api/v2/websocket") as ws:
+        for _ in range(100):
+            if ws.accepted:
+                break
+            await asyncio.sleep(0.01)
+        assert ws.accepted, "handler must accept the websocket before any broadcast"
+
+
 async def test_websocket_receives_broadcast(app_and_store):
     app, _ = app_and_store
     client = app.test_client()
@@ -48,3 +66,79 @@ async def test_websocket_receives_broadcast(app_and_store):
         await app.broadcaster.broadcast({"ID": "live"})
         data = json.loads(await asyncio.wait_for(ws.receive(), timeout=2.0))
         assert data["ID"] == "live"
+
+
+def _ws_first_frame_is_ping(port: int) -> bool:
+    # AIDEV-NOTE: raw-socket WS client (no client lib in the venv). Completes the
+    # handshake, then reads the first frame; an idle server sends nothing but the
+    # heartbeat, so the first frame's opcode (low nibble of byte 0) must be 0x9
+    # (PING). Runs in a thread so it does not block the server's event loop.
+    key = base64.b64encode(os.urandom(16)).decode()
+    req = (
+        f"GET /api/v2/websocket HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    ).encode()
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.settimeout(3.0)
+    try:
+        s.sendall(req)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                return False
+            buf += chunk
+        data = buf.split(b"\r\n\r\n", 1)[1]
+        while not data:
+            data = s.recv(4096)
+        return bool(data) and (data[0] & 0x0F) == 0x9
+    except TimeoutError:
+        return False
+    finally:
+        s.close()
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port: int = s.getsockname()[1]
+    s.close()
+    return port
+
+
+async def test_server_emits_websocket_ping_when_idle() -> None:
+    from hypercorn.asyncio import serve
+
+    from mailhedgehog.app import build_hypercorn_config
+
+    port = _free_port()
+    config = Config(
+        smtp_port=0, http_host="127.0.0.1", http_port=port, ws_ping_interval=0.3
+    )
+    store = MessageStore(config.max_messages, config.max_bytes)
+    app = create_app(config, store)
+    shutdown = asyncio.Event()
+    server = asyncio.create_task(
+        serve(app, build_hypercorn_config(config), shutdown_trigger=shutdown.wait)
+    )
+    try:
+        # wait for the port to accept connections
+        for _ in range(100):
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                writer.close()
+                break
+            except OSError:
+                await asyncio.sleep(0.05)
+        ping_seen = await asyncio.get_running_loop().run_in_executor(
+            None, _ws_first_frame_is_ping, port
+        )
+        assert ping_seen, "server must emit a WS PING (opcode 0x9) within the interval"
+    finally:
+        shutdown.set()
+        await asyncio.wait_for(server, timeout=5)
