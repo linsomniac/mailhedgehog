@@ -15,15 +15,15 @@ messages via a web interface.
 Using Docker:
 
 * Clone this repo.
-* Run: docker build -t mailhedgehog .
-* Run: docker run -p 1025:1025 -p 8025:8025 -it --name mailhedgehog mailhedgehog
+* Run: `docker build -t mailhedgehog .`
+* Run: `docker run -p 1025:1025 -p 8025:8025 -it --name mailhedgehog mailhedgehog`
 * Open a browser to: http://127.0.0.1:8025/
 * Send an e-mail to SMTP port 1025
 
 Using Python 3 / uv:
 
 * Clone this repo
-* uv run mailhedgehog
+* `uv run mailhedgehog`
 * Open a browser to: http://127.0.0.1:8025/
 * Send an e-mail to SMTP port 1025
 
