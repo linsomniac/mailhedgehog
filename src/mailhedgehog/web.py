@@ -9,19 +9,19 @@ from quart import Quart, abort, request
 from mailhedgehog.config import Config
 from mailhedgehog.storage import MessageStore
 
-_WEB = Path(__file__).parent / "web"
+_PKG = Path(__file__).parent
 
 
 def create_app(config: Config, store: MessageStore) -> Quart:
     app = Quart(
         __name__,
-        static_folder=str(_WEB / "static"),
+        static_folder=str(_PKG / "static"),
         static_url_path="/static",
     )
 
     @app.route("/")
     async def index() -> str:
-        return (_WEB / "templates" / "index.html").read_text()
+        return (_PKG / "templates" / "index.html").read_text()
 
     @app.route("/api/v2/messages")
     async def list_messages() -> dict[str, object]:
