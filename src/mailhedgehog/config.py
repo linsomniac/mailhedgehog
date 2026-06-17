@@ -15,6 +15,13 @@ def _int(name: str, default: int) -> int:
     return int(value)
 
 
+def _float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
 def _bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -37,6 +44,7 @@ class Config:
     max_bytes: int = 50 * 1024 * 1024
     max_message_size: int = 25 * 1024 * 1024
     ws_queue_size: int = 256
+    ws_ping_interval: float = 20.0
     debug: bool = False
     tls_cert: str | None = None
     tls_key: str | None = None
@@ -70,6 +78,7 @@ class Config:
             max_bytes=_int("MH_MAX_BYTES", 50 * 1024 * 1024),
             max_message_size=_int("MH_MAX_MESSAGE_SIZE", 25 * 1024 * 1024),
             ws_queue_size=_int("MH_WS_QUEUE_SIZE", 256),
+            ws_ping_interval=_float("MH_WS_PING_INTERVAL", 20.0),
             debug=_bool("MH_DEBUG", False),
             tls_cert=os.environ.get("MH_TLS_CERT") or None,
             tls_key=os.environ.get("MH_TLS_KEY") or None,
