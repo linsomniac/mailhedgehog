@@ -117,7 +117,14 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         content, content_type, filename = result
         disposition = "attachment"
         if filename:
-            disposition += f'; filename="{filename}"'
+            # AIDEV-NOTE: filename is attacker-controlled (RFC 2231 filename* can decode
+            # to CR/LF or quote chars). Strip control chars and quoting chars so the
+            # Content-Disposition header can't be broken or rejected by the ASGI layer.
+            safe_name = "".join(
+                c for c in filename if c.isprintable() and c not in '"\\'
+            )
+            if safe_name:
+                disposition += f'; filename="{safe_name}"'
         return Response(
             content, mimetype=content_type, headers={"Content-Disposition": disposition}
         )

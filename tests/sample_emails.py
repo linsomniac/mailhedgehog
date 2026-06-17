@@ -102,3 +102,23 @@ NESTED_MULTIPART = (
 )
 
 GARBAGE = b"\x00\x01\x02 not even close to an email \xff\xfe"
+
+MULTIPART_EVIL_FILENAME = (
+    b"From: a@x.test\r\n"
+    b"To: b@x.test\r\n"
+    b"Subject: evil-filename\r\n"
+    b'Content-Type: multipart/mixed; boundary="EE"\r\n'
+    b"\r\n"
+    b"--EE\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n"
+    b"\r\n"
+    b"see attachment\r\n"
+    b"--EE\r\n"
+    b"Content-Type: application/octet-stream\r\n"
+    b"Content-Transfer-Encoding: base64\r\n"
+    b"Content-Disposition: attachment;"
+    b" filename*=UTF-8''bad%0D%0Aname.bin\r\n"
+    b"\r\n"
+    b"SGVsbG8=\r\n"
+    b"--EE--\r\n"
+)

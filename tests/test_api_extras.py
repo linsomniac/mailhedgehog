@@ -51,6 +51,18 @@ async def test_download_mime_part(app_and_store):
     ).status_code == 404
 
 
+async def test_download_evil_filename(app_and_store):
+    app, store = app_and_store
+    m = parse(s.MULTIPART_EVIL_FILENAME, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_EVIL_FILENAME)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/part/1/download")
+    assert resp.status_code == 200
+    disposition = resp.headers["Content-Disposition"]
+    assert "\r" not in disposition
+    assert "\n" not in disposition
+
+
 async def test_stubs(app_and_store):
     app, _ = app_and_store
     client = app.test_client()

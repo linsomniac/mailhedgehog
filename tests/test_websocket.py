@@ -46,5 +46,5 @@ async def test_websocket_receives_broadcast(app_and_store):
         await asyncio.sleep(0)  # let the handler task enter Quart's ASGI dispatch
         await asyncio.sleep(0)  # let the handler reach broadcaster.register()
         await app.broadcaster.broadcast({"ID": "live"})
-        data = json.loads(await ws.receive())
+        data = json.loads(await asyncio.wait_for(ws.receive(), timeout=2.0))
         assert data["ID"] == "live"
