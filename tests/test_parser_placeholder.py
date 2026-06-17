@@ -16,4 +16,5 @@ def test_placeholder_has_error_note_and_raw():
     assert m["From"]["Mailbox"] == "a"
     assert m["MIME"] is None
     assert "junk" in m["Raw"]["Data"]
+    assert "junk" in m["Content"]["Body"]
     json.dumps(m)
