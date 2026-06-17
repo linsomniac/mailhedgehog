@@ -2,15 +2,42 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
-from quart import Quart, Response, abort, request
+from quart import Quart, Response, abort, request, websocket
 
 from mailhedgehog.config import Config
-from mailhedgehog.parser import get_mime_part
+from mailhedgehog.parser import Message, get_mime_part
+from mailhedgehog.smtp import SmtpHandler, create_smtp_server
 from mailhedgehog.storage import MessageStore
 
 _PKG = Path(__file__).parent
+
+
+# AIDEV-NOTE: bounded per-client queues. A slow/dead UI client drops live frames
+# (it reconciles on the next /api/v2/messages refresh) and can never grow memory.
+class WebSocketBroadcaster:
+    def __init__(self, queue_size: int) -> None:
+        self._queue_size = queue_size
+        self._clients: set[asyncio.Queue[str]] = set()
+
+    def register(self) -> asyncio.Queue[str]:
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self._queue_size)
+        self._clients.add(queue)
+        return queue
+
+    def unregister(self, queue: asyncio.Queue[str]) -> None:
+        self._clients.discard(queue)
+
+    async def broadcast(self, message: Message) -> None:
+        data = json.dumps(message)
+        for queue in list(self._clients):
+            try:
+                queue.put_nowait(data)
+            except asyncio.QueueFull:
+                pass
 
 
 def create_app(config: Config, store: MessageStore) -> Quart:
@@ -104,5 +131,36 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     @app.route("/api/v1/messages/<msgid>/release", methods=["POST"])
     async def release(msgid: str) -> tuple[str, int]:
         return "Not Implemented", 501
+
+    broadcaster = WebSocketBroadcaster(config.ws_queue_size)
+    app.broadcaster = broadcaster  # type: ignore[attr-defined]
+    smtp_server: list[asyncio.AbstractServer] = []
+
+    @app.websocket("/api/v2/websocket")
+    async def ws() -> None:
+        queue = broadcaster.register()
+        try:
+            while True:
+                await websocket.send(await queue.get())
+        finally:
+            broadcaster.unregister(queue)
+
+    @app.before_serving
+    async def _start_smtp() -> None:
+        handler = SmtpHandler(store, broadcaster.broadcast)
+        server = await create_smtp_server(
+            asyncio.get_running_loop(),
+            handler,
+            config.smtp_host,
+            config.smtp_port,
+            config.max_message_size,
+        )
+        smtp_server.append(server)
+
+    @app.after_serving
+    async def _stop_smtp() -> None:
+        for server in smtp_server:
+            server.close()
+            await server.wait_closed()
 
     return app
