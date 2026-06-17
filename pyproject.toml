@@ -14,7 +14,14 @@ dependencies = ["quart>=0.17", "aiosmtpd"]
 mailhedgehog = "mailhedgehog.app:main"
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "aiosmtplib", "mypy", "ruff"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "aiosmtplib",
+    "mypy",
+    "ruff",
+    "pillow>=12.2.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mailhedgehog"]
