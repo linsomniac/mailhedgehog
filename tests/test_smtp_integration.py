@@ -22,7 +22,7 @@ async def _send_raw(port, sender, recipients, data: bytes):
     async with aiosmtplib.SMTP(hostname="127.0.0.1", port=port) as client:
         await client.ehlo()
         await client.mail(sender)
-        for rcpt in (recipients if isinstance(recipients, list) else [recipients]):
+        for rcpt in recipients if isinstance(recipients, list) else [recipients]:
             await client.rcpt(rcpt)
         return await client.data(data)
 
