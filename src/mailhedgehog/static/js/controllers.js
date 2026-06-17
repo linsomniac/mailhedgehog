@@ -141,7 +141,7 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
       $scope.wsReconnectTimer = null;
       $scope.openStream();
     }, delay);
-    $scope.wsReconnectDelay = Math.min($scope.wsReconnectDelay * 2, $scope.wsReconnectMax);
+    $scope.wsReconnectDelay = Math.min(delay * 2, $scope.wsReconnectMax);
   }
 
   $scope.toggleStream = function() {
@@ -198,6 +198,7 @@ mailhogApp.controller('MailCtrl', function ($scope, $http, $sce, $timeout) {
   }
   $scope.closeStream = function() {
     $scope.wsManuallyClosed = true;
+    $scope.wsReconnectDelay = $scope.wsReconnectBase;
     if ($scope.wsReconnectTimer) {
       $timeout.cancel($scope.wsReconnectTimer);
       $scope.wsReconnectTimer = null;
