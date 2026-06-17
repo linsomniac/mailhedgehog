@@ -15,7 +15,9 @@ def test_build_returns_config_and_app(monkeypatch):
 def test_build_hypercorn_config_sets_ping_interval():
     from mailhedgehog.app import build_hypercorn_config
 
-    hcfg = build_hypercorn_config(Config(http_host="", http_port=8025, ws_ping_interval=20.0))
+    hcfg = build_hypercorn_config(
+        Config(http_host="", http_port=8025, ws_ping_interval=20.0)
+    )
     assert hcfg.websocket_ping_interval == 20.0
     assert hcfg.bind == ["127.0.0.1:8025"]
 

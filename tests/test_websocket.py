@@ -97,7 +97,7 @@ def _ws_first_frame_is_ping(port: int) -> bool:
         while not data:
             data = s.recv(4096)
         return bool(data) and (data[0] & 0x0F) == 0x9
-    except socket.timeout:
+    except TimeoutError:
         return False
     finally:
         s.close()
