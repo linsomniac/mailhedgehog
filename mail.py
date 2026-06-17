@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-import time
 import datetime
-from email.utils import parseaddr
+import time
 from email import message_from_bytes
+from email.utils import parseaddr
 from uuid import uuid4
 
 

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mailhedgehog"
+version = "0.2.0"
+description = "A simple, robust SMTP sink with a MailHog-compatible web UI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["quart>=0.17", "aiosmtpd"]
+
+[project.scripts]
+mailhedgehog = "mailhedgehog.app:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "aiosmtplib", "mypy", "ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailhedgehog"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["aiosmtpd.*", "aiosmtplib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
