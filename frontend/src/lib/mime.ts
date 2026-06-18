@@ -2,8 +2,10 @@
 // All HTML rendering goes through buildSrcdoc() which:
 //   1. Strips <script> and <base> elements
 //   2. Rewrites cid: refs to same-origin API URLs
-//   3. Injects a Content-Security-Policy meta tag (scripts blocked, forms blocked)
-//   4. Returns a string for use as iframe srcdoc (with sandbox="" — no allow-scripts/allow-same-origin)
+//   3. If opts.proxyImages, rewrites remaining http(s) image refs through opts.proxyUrl
+//      (runs AFTER cid rewrite so /api/... cid URLs are NOT re-proxied)
+//   4. Injects a Content-Security-Policy meta tag (scripts blocked, forms blocked)
+//   5. Returns a string for use as iframe srcdoc (with sandbox="" — no allow-scripts/allow-same-origin)
 //
 // Plain text is NEVER inserted via {@html}; linkify() returns tokens the component renders as text.
 // The only {@html} allowed in the entire frontend is the iframe srcdoc binding.
@@ -199,24 +201,26 @@ const EMAIL_CSP =
   "form-action 'none'; " +
   "base-uri 'none'";
 
+export interface SrcdocOptions {
+  cidUrl: (id: string, cid: string) => string;
+  proxyImages?: boolean;
+  proxyUrl?: (url: string) => string;
+}
+
 /**
  * Sanitize an HTML email body for use in a sandboxed iframe srcdoc.
  *
- * Security operations performed:
+ * Security operations:
  * 1. Remove all <script> elements
  * 2. Remove all <base> elements
- * 3. Rewrite cid: references in URL attributes to same-origin API URLs
- * 4. Inject CSP meta tag as first child of <head>
- *
- * @param html - Raw decoded HTML string from the email part.
- * @param msgId - Message ID for building cid: replacement URLs.
- * @param cidUrlFn - Function mapping (msgId, cid) → URL string.
- * @returns Full HTML document string suitable for iframe srcdoc.
+ * 3. Rewrite cid: references to same-origin API URLs
+ * 4. If opts.proxyImages, rewrite remaining http(s) image refs to the proxy
+ * 5. Inject the CSP meta tag as first child of <head>
  */
 export function buildSrcdoc(
   html: string,
   msgId: string,
-  cidUrlFn: (id: string, cid: string) => string,
+  opts: SrcdocOptions,
 ): string {
   // AIDEV-NOTE: DOMParser is available in browsers and jsdom (provided by the test env).
   const parser = new DOMParser();
@@ -229,17 +233,63 @@ export function buildSrcdoc(
   doc.querySelectorAll('base').forEach((el) => el.remove());
 
   // --- Step 3: Rewrite cid: references ---
-  rewriteCidRefs(doc, msgId, cidUrlFn);
+  rewriteCidRefs(doc, msgId, opts.cidUrl);
 
-  // --- Step 4: Inject CSP meta tag as first child of <head> ---
+  // --- Step 4: Proxy remaining remote images (opt-in) ---
+  // AIDEV-NOTE: runs AFTER cid rewriting, so cid refs (now /api/...) are not
+  // re-touched. Only http(s) values are proxied; data:/blob: are left alone.
+  if (opts.proxyImages && opts.proxyUrl) {
+    rewriteRemoteImages(doc, opts.proxyUrl);
+  }
+
+  // --- Step 5: Inject CSP meta tag as first child of <head> ---
   const cspMeta = doc.createElement('meta');
   cspMeta.setAttribute('http-equiv', 'Content-Security-Policy');
   cspMeta.setAttribute('content', EMAIL_CSP);
   const head = doc.head;
   head.insertBefore(cspMeta, head.firstChild);
 
-  // Serialize back to HTML string
   return `<!doctype html>${doc.documentElement.outerHTML}`;
+}
+
+/**
+ * Rewrite remote http(s) image references to the same-origin proxy.
+ * Mirrors rewriteCidRefs' surfaces: src/poster, srcset, inline style url().
+ * Leaves cid-rewritten (/api/...), data:, blob:, and relative URLs untouched.
+ */
+function rewriteRemoteImages(doc: Document, proxyUrl: (url: string) => string): void {
+  const isRemote = (v: string): boolean => /^https?:\/\//i.test(v.trim());
+
+  for (const attr of ['src', 'poster']) {
+    doc.querySelectorAll(`[${attr}]`).forEach((el) => {
+      const val = el.getAttribute(attr) ?? '';
+      if (isRemote(val)) el.setAttribute(attr, proxyUrl(val.trim()));
+    });
+  }
+
+  doc.querySelectorAll('[srcset]').forEach((el) => {
+    const srcset = el.getAttribute('srcset') ?? '';
+    const rewritten = srcset
+      .split(',')
+      .map((entry) => {
+        const parts = entry.trim().split(/\s+/);
+        if (parts.length > 0 && isRemote(parts[0])) {
+          parts[0] = proxyUrl(parts[0]);
+        }
+        return parts.join(' ');
+      })
+      .join(', ');
+    if (rewritten !== srcset) el.setAttribute('srcset', rewritten);
+  });
+
+  doc.querySelectorAll('[style]').forEach((el) => {
+    const style = el.getAttribute('style') ?? '';
+    const rewritten = style.replace(
+      /url\(\s*(['"]?)(https?:\/\/[^'")\s]+)\1\s*\)/gi,
+      (_, _q: string, u: string) => `url(${proxyUrl(u)})`,
+    );
+    if (rewritten !== style) el.setAttribute('style', rewritten);
+  });
 }
 
 /**

@@ -277,10 +277,12 @@ describe('getPlain / getHtml', () => {
 describe('buildSrcdoc', () => {
   const mockCidUrl = (id: string, cid: string) =>
     `/api/v1/messages/${id}/mime/cid/${encodeURIComponent(cid)}/download`;
+  const mockProxyUrl = (url: string) => `/api/v2/proxy?url=${encodeURIComponent(url)}`;
+  const cidOpts = { cidUrl: mockCidUrl };
 
   it('removes all <script> elements', () => {
     const html = '<html><body><script>alert("xss")<\/script><p>Hello</p></body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).not.toContain('<script');
     expect(result).not.toContain('alert("xss")');
     expect(result).toContain('<p>Hello</p>');
@@ -288,13 +290,13 @@ describe('buildSrcdoc', () => {
 
   it('removes all <base> elements', () => {
     const html = '<html><head><base href="https://evil.com/"></head><body>Hi</body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).not.toContain('<base');
   });
 
   it('injects CSP meta tag in <head>', () => {
     const html = '<html><head><title>Test</title></head><body>Hi</body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).toContain('http-equiv');
     expect(result).toContain('Content-Security-Policy');
     expect(result).toContain("script-src 'none'");
@@ -303,7 +305,7 @@ describe('buildSrcdoc', () => {
 
   it('CSP meta is first child of <head>', () => {
     const html = '<html><head><title>Test</title></head><body>Hi</body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     // The CSP meta should come before the title
     const cspPos = result.indexOf('Content-Security-Policy');
     const titlePos = result.indexOf('<title>');
@@ -312,34 +314,34 @@ describe('buildSrcdoc', () => {
 
   it('rewrites cid: img src to API URL', () => {
     const html = '<html><body><img src="cid:logo@example.com"></body></html>';
-    const result = buildSrcdoc(html, 'msg-abc', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg-abc', cidOpts);
     expect(result).toContain('/api/v1/messages/msg-abc/mime/cid/');
     expect(result).not.toContain('cid:logo');
   });
 
   it('rewrites cid: case-insensitively (CID:)', () => {
     const html = '<html><body><img src="CID:logo@example.com"></body></html>';
-    const result = buildSrcdoc(html, 'msg-abc', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg-abc', cidOpts);
     expect(result).toContain('/api/v1/messages/msg-abc/mime/cid/');
     expect(result).not.toContain('CID:logo');
   });
 
   it('does NOT rewrite non-cid URLs', () => {
     const html = '<html><body><img src="https://example.com/img.png"></body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).toContain('https://example.com/img.png');
   });
 
   it('returns a string starting with <!doctype html>', () => {
     const html = '<html><body>Hi</body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result.startsWith('<!doctype html>')).toBe(true);
   });
 
   it('removes multiple scripts', () => {
     const html =
       '<html><head><script>a()<\/script></head><body><script>b()<\/script></body></html>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).not.toContain('<script');
     expect(result).not.toContain('a()');
     expect(result).not.toContain('b()');
@@ -348,7 +350,7 @@ describe('buildSrcdoc', () => {
   it('strips angle brackets from cid values', () => {
     // Some emails encode cid as cid:<content-id@host>
     const html = '<html><body><img src="cid:&lt;logo@example.com&gt;"></body></html>';
-    const result = buildSrcdoc(html, 'msg-xyz', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg-xyz', cidOpts);
     // Should resolve to a URL, not have cid: in src
     expect(result).not.toContain('cid:');
   });
@@ -358,13 +360,83 @@ describe('buildSrcdoc', () => {
   // so buildSrcdoc should still find a <head> to prepend the CSP meta into.
   it('injects CSP meta even when input HTML has no <head> or <html>', () => {
     const html = '<p>hi</p>';
-    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    const result = buildSrcdoc(html, 'msg1', cidOpts);
     expect(result).toContain('Content-Security-Policy');
     expect(result).toContain("script-src 'none'");
     // The output should still be a full document
     expect(result.startsWith('<!doctype html>')).toBe(true);
     // The paragraph content should be preserved
     expect(result).toContain('<p>hi</p>');
+  });
+
+  it('rewrites remote http(s) img src to the proxy when proxyImages is on', () => {
+    const html = '<html><body><img src="https://h.example/a.png"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fa.png');
+    expect(result).not.toContain('src="https://h.example/a.png"');
+  });
+
+  it('rewrites http img src too (not only https) when proxying', () => {
+    const html = '<html><body><img src="http://h.example/a.png"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=http%3A%2F%2Fh.example%2Fa.png');
+  });
+
+  it('does NOT proxy data: or blob: URLs', () => {
+    const html =
+      '<html><body><img src="data:image/png;base64,AAAA"><img src="blob:abc"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('data:image/png;base64,AAAA');
+    expect(result).toContain('blob:abc');
+    expect(result).not.toContain('/api/v2/proxy');
+  });
+
+  it('proxies cid AND remote together: cid still goes to the cid endpoint', () => {
+    const html =
+      '<html><body><img src="cid:logo@x"><img src="https://h.example/a.png"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v1/messages/m/mime/cid/');
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fa.png');
+    expect(result).not.toContain('cid:logo');
+  });
+
+  it('proxies srcset entries and inline style url() when proxying', () => {
+    const html =
+      '<html><body>' +
+      '<img srcset="https://h.example/a.png 1x, https://h.example/b.png 2x">' +
+      '<div style="background:url(https://h.example/c.png)"></div>' +
+      '</body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fa.png');
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fb.png');
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fc.png');
+  });
+
+  it('leaves remote img direct when proxyImages is off', () => {
+    const html = '<html><body><img src="https://h.example/a.png"></body></html>';
+    const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, proxyImages: false });
+    expect(result).toContain('https://h.example/a.png');
+    expect(result).not.toContain('/api/v2/proxy');
   });
 });
 

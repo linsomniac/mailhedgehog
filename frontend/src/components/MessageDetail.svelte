@@ -14,7 +14,7 @@
 
   import type { FullMessage } from '../lib/types.js';
   import { store } from '../lib/store.svelte.js';
-  import { emlUrl, partUrl, cidUrl } from '../lib/api.js';
+  import { emlUrl, partUrl, cidUrl, proxyUrl } from '../lib/api.js';
   import {
     buildSrcdoc,
     getHtml,
@@ -102,7 +102,11 @@
       if (!html) {
         srcdocError = 'no-html-part';
       } else {
-        srcdocCache = buildSrcdoc(html, msgId, cidUrl);
+        srcdocCache = buildSrcdoc(html, msgId, {
+          cidUrl,
+          proxyImages: store.proxyImages,
+          proxyUrl,
+        });
       }
     } catch (err) {
       if (err instanceof PartTooLargeError) {
