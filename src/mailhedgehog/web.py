@@ -9,13 +9,38 @@ from pathlib import Path
 from quart import Quart, Response, abort, request, websocket
 
 from mailhedgehog.config import Config
-from mailhedgehog.parser import Message, get_mime_part
+from mailhedgehog.parser import Message, decode_header_value, get_mime_part
 from mailhedgehog.smtp import SmtpHandler, create_smtp_server
 from mailhedgehog.storage import KNOWN_SEARCH_KINDS, MessageStore
 
 # AIDEV-NOTE: hard cap on page size to keep list and search responses bounded.
 # Requests with limit > MAX_PAGE_LIMIT are silently clamped, not rejected.
 MAX_PAGE_LIMIT = 200
+
+
+# AIDEV-NOTE: to_summary produces the slim 7-key projection used by ?summary=1.
+# Full address dicts are kept unchanged (the UI needs Mailbox+Domain for display).
+# To is truncated to 3 entries; ToCount carries the real total so the UI can
+# show "and N more" without fetching the full message.
+def to_summary(message: Message) -> dict[str, object]:
+    """Return a slim 7-key projection of a full message dict.
+
+    Keys: ID, From, To (max 3), ToCount, Subject (RFC-2047 decoded), Created, Size.
+    """
+    headers: dict[str, list[str]] = message.get("Content", {}).get("Headers", {})
+    raw_subject: str = (headers.get("Subject") or [""])[0]
+    subject: str = decode_header_value(raw_subject) if raw_subject else ""
+    to_list: list[object] = message.get("To") or []
+    return {
+        "ID": message["ID"],
+        "From": message["From"],
+        "To": to_list[:3],
+        "ToCount": len(to_list),
+        "Subject": subject,
+        "Created": message["Created"],
+        "Size": message["Content"]["Size"],
+    }
+
 
 _PKG = Path(__file__).parent
 
@@ -44,6 +69,14 @@ class WebSocketBroadcaster:
                 pass
 
 
+def _is_summary(value: str | None) -> bool:
+    """Return True when the ?summary query-param is truthy.
+
+    Accepted truthy values: "1" or "true" (case-insensitive).
+    """
+    return (value or "").lower() in {"1", "true"}
+
+
 def create_app(config: Config, store: MessageStore) -> Quart:
     app = Quart(
         __name__,
@@ -60,6 +93,8 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         start = max(request.args.get("start", 0, type=int), 0)
         limit = min(max(request.args.get("limit", 50, type=int), 0), MAX_PAGE_LIMIT)
         items, total = store.list(start, limit)
+        if _is_summary(request.args.get("summary")):
+            items = [to_summary(m) for m in items]
         return {
             "total": total,
             "count": len(items),
@@ -97,6 +132,8 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         # AIDEV-NOTE: body search ("containing") can be CPU-heavy on large stores.
         # Run the entire scan off the event loop so the ASGI worker stays unblocked.
         items, total = await asyncio.to_thread(store.search, kind, query, start, limit)
+        if _is_summary(request.args.get("summary")):
+            items = [to_summary(m) for m in items]
         return {
             "total": total,
             "count": len(items),

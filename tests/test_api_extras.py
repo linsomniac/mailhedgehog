@@ -155,3 +155,173 @@ async def test_list_start_negative_clamped(app_and_store):
     assert resp.status_code == 200
     assert data["start"] == 0
     assert data["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (B3): ?summary=1 slim projection on list & search
+# ---------------------------------------------------------------------------
+
+_SUMMARY_KEYS = {"ID", "From", "To", "ToCount", "Subject", "Created", "Size"}
+_FULL_EXTRA_KEYS = {"Content", "MIME", "Raw"}  # present in full, absent in summary
+
+
+async def test_list_summary_keys_and_decoded_subject(app_and_store):
+    """?summary=1 on list returns ONLY the 7 slim keys with decoded Subject."""
+    app, store = app_and_store
+    m = parse(s.RFC2047_SUBJECT, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.RFC2047_SUBJECT)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?summary=1")
+    assert resp.status_code == 200
+    data = await resp.get_json()
+    assert data["total"] == 1
+    assert data["count"] == 1
+    item = data["items"][0]
+    # Exactly the 7 slim keys — no extras
+    assert set(item.keys()) == _SUMMARY_KEYS
+    # RFC-2047 encoded subject must be decoded: =?UTF-8?B?Y2Fmw6k=?= → "café"
+    assert item["Subject"] == "café"
+    # Size must be an int
+    assert isinstance(item["Size"], int)
+
+
+async def test_list_summary_true_truthy(app_and_store):
+    """?summary=true (case-insensitive) is also accepted as truthy."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "a@example.com", ["b@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?summary=True")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    assert set(data["items"][0].keys()) == _SUMMARY_KEYS
+
+
+async def test_list_no_summary_returns_full_items(app_and_store):
+    """Default (no summary param) returns full message items with Content/MIME/Raw."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "alice@example.com", ["bob@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    item = data["items"][0]
+    # Full items must have Content, MIME, Raw
+    for key in _FULL_EXTRA_KEYS:
+        assert key in item, f"Full item missing key: {key}"
+
+
+async def test_list_summary_to_truncated_and_tocount(app_and_store):
+    """?summary=1 truncates To to 3 entries and sets ToCount to the real total."""
+    app, store = app_and_store
+    recipients = [f"r{i}@example.com" for i in range(5)]
+    # Build a raw email with 5 To addresses
+    raw = (
+        b"From: sender@example.com\r\n"
+        b"To: r0@example.com, r1@example.com, r2@example.com,"
+        b" r3@example.com, r4@example.com\r\n"
+        b"Subject: Multi-To\r\n"
+        b"\r\n"
+        b"body\r\n"
+    )
+    m = parse(raw, "sender@example.com", recipients, "h")
+    store.add(m, raw)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?summary=1")
+    data = await resp.get_json()
+    item = data["items"][0]
+    assert item["ToCount"] == 5
+    assert len(item["To"]) == 3
+
+
+async def test_list_summary_missing_subject(app_and_store):
+    """?summary=1 returns empty string for Subject when header is missing."""
+    app, store = app_and_store
+    raw = b"From: a@x.test\r\nTo: b@x.test\r\n\r\nbody\r\n"
+    m = parse(raw, "a@x.test", ["b@x.test"], "h")
+    store.add(m, raw)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?summary=1")
+    data = await resp.get_json()
+    assert data["items"][0]["Subject"] == ""
+
+
+async def test_list_total_count_identical_summary_vs_full(app_and_store):
+    """total and count are identical for summary=0 vs summary=1 over same store."""
+    app, store = app_and_store
+    for i in range(3):
+        m = parse(s.ASCII, f"u{i}@example.com", ["b@example.com"], "h")
+        store.add(m, s.ASCII)
+    client = app.test_client()
+    full = await (await client.get("/api/v2/messages")).get_json()
+    slim = await (await client.get("/api/v2/messages?summary=1")).get_json()
+    assert full["total"] == slim["total"]
+    assert full["count"] == slim["count"]
+    assert full["start"] == slim["start"]
+
+
+async def test_search_summary_keys_and_decoded_subject(app_and_store):
+    """?summary=1 on search returns ONLY the 7 slim keys with decoded Subject."""
+    app, store = app_and_store
+    m = parse(s.RFC2047_SUBJECT, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.RFC2047_SUBJECT)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=from&query=a%40x.test&summary=1")
+    assert resp.status_code == 200
+    data = await resp.get_json()
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert set(item.keys()) == _SUMMARY_KEYS
+    assert item["Subject"] == "café"
+
+
+async def test_search_no_summary_returns_full_items(app_and_store):
+    """Default search (no summary param) still returns full message items."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "alice@example.com", ["bob@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=from&query=alice")
+    data = await resp.get_json()
+    item = data["items"][0]
+    for key in _FULL_EXTRA_KEYS:
+        assert key in item, f"Full search item missing key: {key}"
+
+
+async def test_search_summary_to_truncated_and_tocount(app_and_store):
+    """?summary=1 on search truncates To to 3 and sets correct ToCount."""
+    app, store = app_and_store
+    recipients = [f"r{i}@example.com" for i in range(5)]
+    raw = (
+        b"From: sender@example.com\r\n"
+        b"To: r0@example.com, r1@example.com, r2@example.com,"
+        b" r3@example.com, r4@example.com\r\n"
+        b"Subject: Multi-To\r\n"
+        b"\r\n"
+        b"body\r\n"
+    )
+    m = parse(raw, "sender@example.com", recipients, "h")
+    store.add(m, raw)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=from&query=sender&summary=1")
+    data = await resp.get_json()
+    item = data["items"][0]
+    assert item["ToCount"] == 5
+    assert len(item["To"]) == 3
+
+
+async def test_search_total_count_identical_summary_vs_full(app_and_store):
+    """total and count are identical for summary=0 vs summary=1 on search."""
+    app, store = app_and_store
+    for i in range(3):
+        m = parse(s.ASCII, f"alice-{i}@example.com", ["b@example.com"], "h")
+        store.add(m, s.ASCII)
+    client = app.test_client()
+    full = await (await client.get("/api/v2/search?kind=from&query=alice")).get_json()
+    slim = await (
+        await client.get("/api/v2/search?kind=from&query=alice&summary=1")
+    ).get_json()
+    assert full["total"] == slim["total"]
+    assert full["count"] == slim["count"]
+    assert full["start"] == slim["start"]
