@@ -9,6 +9,7 @@ caps the response size, and requires an image/* content-type.
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -23,6 +24,13 @@ from urllib.parse import urljoin, urlsplit
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _CHUNK = 65536
+
+# AIDEV-NOTE: SECURITY — strict allowlist for the content-type. A remote host
+# can fold/inject the Content-Type header (CR/LF, extra tokens); a loose
+# startswith() would let "image/png\r\n X-Injected: yes" through and later blow
+# up Response(mimetype=...). fullmatch on a clean image/<subtype> token rejects
+# anything with whitespace/control/separator chars.
+_IMAGE_CONTENT_TYPE = re.compile(r"image/[a-z0-9][a-z0-9.+\-]*")
 
 
 class FetchError(Exception):
@@ -40,6 +48,10 @@ def is_public_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    # AIDEV-NOTE: CGNAT range 100.64.0.0/10 (RFC 6598) is intentionally treated as
+    # public here: Python's ipaddress marks it as private, but the proxy is an
+    # opt-in internal sink where operators may route traffic through that range.
+    # Operators who need to block it should supply a custom is_ip_allowed callback.
     return not (
         addr.is_loopback
         or addr.is_private
@@ -127,7 +139,7 @@ def fetch_remote_image(
             ctype = (
                 (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             )
-            if not ctype.startswith("image/"):
+            if not _IMAGE_CONTENT_TYPE.fullmatch(ctype):
                 raise FetchError("not an image")
             data = bytearray()
             while True:

@@ -70,3 +70,15 @@ async def test_proxy_502_on_unexpected_error(monkeypatch):
     client = _app(proxy_remote_images=True).test_client()
     resp = await client.get("/api/v2/proxy?url=http://example.com/a.png")
     assert resp.status_code == 502
+
+
+async def test_proxy_502_on_newline_content_type(monkeypatch):
+    # A content-type containing a newline would raise in Response(mimetype=...);
+    # the route must convert that into 502, never 500 / a stack trace.
+    monkeypatch.setattr(
+        "mailhedgehog.web.fetch_remote_image",
+        lambda url, **kw: (b"x", "image/png\r\nX-Injected: yes"),
+    )
+    client = _app(proxy_remote_images=True).test_client()
+    resp = await client.get("/api/v2/proxy?url=http://example.com/a.png")
+    assert resp.status_code == 502

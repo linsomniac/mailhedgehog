@@ -39,6 +39,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html", b"<h1>nope</h1>")
         elif self.path == "/svg":
             self._send(200, "image/svg+xml", b"<svg></svg>")
+        elif self.path == "/badtype":
+            self._send(200, "image/png evil", PNG)  # space => not a clean image token
         else:
             self._send(404, "text/plain", b"nope")
 
@@ -159,6 +161,17 @@ def test_fetch_rejects_non_http_scheme():
     with pytest.raises(FetchError):
         fetch_remote_image(
             "file:///etc/passwd", max_bytes=1000, timeout=5, max_redirects=5
+        )
+
+
+def test_fetch_rejects_malformed_content_type(server):
+    with pytest.raises(FetchError):
+        fetch_remote_image(
+            f"{server}/badtype",
+            max_bytes=1_000_000,
+            timeout=5,
+            max_redirects=5,
+            is_ip_allowed=ALLOW_LOOPBACK,
         )
 
 

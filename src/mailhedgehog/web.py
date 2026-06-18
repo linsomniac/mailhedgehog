@@ -188,19 +188,21 @@ def create_app(config: Config, store: MessageStore) -> Quart:
                 timeout=config.proxy_timeout,
                 max_redirects=config.proxy_max_redirects,
             )
+            return Response(
+                content,
+                mimetype=content_type,
+                headers={
+                    "X-Content-Type-Options": "nosniff",
+                    "Cache-Control": "private, max-age=300",
+                },
+            )
         except FetchError:
             abort(502)
         except Exception:
             # Defensive: never surface an unexpected fetch failure as a 500.
+            # This also catches ValueError from Response(mimetype=...) if a
+            # malformed content-type somehow passes through Layer 1 validation.
             abort(502)
-        return Response(
-            content,
-            mimetype=content_type,
-            headers={
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "private, max-age=300",
-            },
-        )
 
     @app.route("/api/v1/messages/<msgid>/download")
     async def download(msgid: str) -> Response:
