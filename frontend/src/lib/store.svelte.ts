@@ -4,9 +4,9 @@
 //
 // Key design decisions:
 // - rows is newest-first (index 0 = newest). applyLive prepends; loadMore appends.
-// - seen: Set<string> tracks IDs in rows for O(1) dedup.
+// - seen: Set<string> is a plain (non-$state) imperative dedup index for O(1) dedup.
 // - pendingNew accumulates incoming live messages when not atTop or when searching.
-// - resync() reconciles after WS reconnect by reloading the first page from server.
+// - resync() collapses the window to the server's first page (first-page-snapshot).
 // - select() handles 404 by removing the ghost row and surfacing selectError.
 // - The store is a singleton exported object; use $state/$derived in .svelte.ts context.
 
@@ -44,7 +44,11 @@ function lruGet(cache: Map<string, FullMessage>, id: string): FullMessage | unde
 function createStore() {
   // --- Core reactive state ---
   let rows = $state<Summary[]>([]);
-  let seen = $state<Set<string>>(new Set());
+  // AIDEV-NOTE: seen is intentionally NOT $state — it is an imperative dedup index
+  // mutated in-place via .add()/.delete(). Svelte 5's proxy does not track in-place
+  // Set mutation, and seen is never read in a reactive/template expression anyway.
+  // Mirror the same reasoning as detailCache below.
+  let seen = new Set<string>();
   let total = $state(0);
   let selectedId = $state<string | null>(null);
   let wsStatus = $state<Status>('reconnecting');
@@ -121,40 +125,20 @@ function createStore() {
     }
   }
 
-  // AIDEV-NOTE: resync reloads the first page from the server and reconciles rows/seen/total.
-  // This ensures the client doesn't show "ghost" rows for messages the server has evicted.
-  // Called on WS (re)open and after showPending.
+  // AIDEV-NOTE: resync intentionally collapses the window to the server's NEWEST page;
+  // deep-scroll position is NOT preserved across resync. This is acceptable because resync
+  // only fires on (a) the user clicking the "N new messages" pill (they're going to the top
+  // anyway) and (b) a websocket (re)open (rare recovery to drop frames missed while
+  // disconnected). The FIFO/oldest-evicted storage model makes a first-page snapshot the
+  // safe source of truth — client rows beyond the server's first page are likely ghosts of
+  // evicted messages.
   async function resync(): Promise<void> {
     loading = true;
     try {
       const page = await currentFetch(0, PAGE);
+      rows = page.items;
+      seen = new Set(page.items.map((s) => s.ID));
       total = page.total;
-      const serverIds = new Set(page.items.map((s) => s.ID));
-
-      // Keep client rows that are still known by server (within its first page)
-      // AIDEV-NOTE: Server's first PAGE rows are authoritative; drop client rows NOT in that set
-      // only if client has <= PAGE rows (otherwise we only know about the first page).
-      // Simple approach: replace entirely with server page if rows <= PAGE, else reconcile.
-      if (rows.length <= PAGE) {
-        rows = page.items;
-        seen = new Set(page.items.map((s) => s.ID));
-      } else {
-        // Filter out any rows not in serverIds from the head (most likely eviction target is end).
-        // Then re-merge server items at the front to fill any gaps.
-        const filtered = rows.filter((r) => {
-          // AIDEV-NOTE: Only evict rows the server explicitly doesn't know about
-          // IF they would be within the server's first page range.
-          // Rows beyond PAGE are kept (server knows them but didn't return them).
-          return !serverIds.has(r.ID) ? false : true;
-        });
-        // Prepend any server items not already present
-        const toAdd: Summary[] = [];
-        for (const s of page.items) {
-          if (!seen.has(s.ID)) toAdd.push(s);
-        }
-        rows = [...toAdd, ...filtered];
-        seen = new Set(rows.map((r) => r.ID));
-      }
       pendingNew = 0;
     } finally {
       loading = false;

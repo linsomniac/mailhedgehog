@@ -225,7 +225,7 @@ describe('applyLive()', () => {
 });
 
 describe('resync()', () => {
-  it('reconciles rows to server truth, dropping ghost rows', async () => {
+  it('collapses rows to server first page, dropping ghost rows', async () => {
     const items = [makeSummary('a'), makeSummary('b'), makeSummary('c')];
     vi.mocked(api.listMessages).mockResolvedValue(makePage(items, 3));
     await store.loadFirst();
@@ -242,6 +242,46 @@ describe('resync()', () => {
     expect(store.rows).toHaveLength(2);
     expect(store.rows.map((r) => r.ID)).toEqual(['a', 'b']);
     expect(store.total).toBe(2);
+    // seen must be consistent with rows
+    expect(store.seen.has('a')).toBe(true);
+    expect(store.seen.has('b')).toBe(true);
+    expect(store.seen.has('c')).toBe(false);
+  });
+
+  it('collapses a deep window (rows.length > PAGE) to first page, dropping ghost rows', async () => {
+    // Simulate a client that has scrolled deep: rows.length > PAGE
+    // First, load a page of items
+    const firstPageItems = Array.from({ length: PAGE }, (_, i) => makeSummary(`p${i}`));
+    vi.mocked(api.listMessages).mockResolvedValue(makePage(firstPageItems, PAGE + 10));
+    await store.loadFirst();
+
+    // Manually push extra rows to simulate deep scroll beyond first page
+    const extraItems = Array.from({ length: 5 }, (_, i) => makeSummary(`extra${i}`));
+    for (const item of extraItems) {
+      store.rows.push(item);
+      store.seen.add(item.ID);
+    }
+    expect(store.rows).toHaveLength(PAGE + 5);
+
+    // Server returns only the newest PAGE items (first page snapshot)
+    const serverPage = Array.from({ length: PAGE }, (_, i) => makeSummary(`new${i}`));
+    vi.mocked(api.listMessages).mockResolvedValueOnce(makePage(serverPage, PAGE));
+    await store.resync();
+
+    // After resync: rows must exactly equal the server's first page, no ghosts
+    expect(store.rows).toHaveLength(PAGE);
+    expect(store.rows.map((r) => r.ID)).toEqual(serverPage.map((s) => s.ID));
+    expect(store.total).toBe(PAGE);
+    // seen must be consistent — no old deep rows remain
+    for (const item of extraItems) {
+      expect(store.seen.has(item.ID)).toBe(false);
+    }
+    for (const item of firstPageItems) {
+      expect(store.seen.has(item.ID)).toBe(false); // old p* IDs gone too
+    }
+    for (const item of serverPage) {
+      expect(store.seen.has(item.ID)).toBe(true);
+    }
   });
 
   it('resets pendingNew to 0 after resync', async () => {
