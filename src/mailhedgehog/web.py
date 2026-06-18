@@ -100,7 +100,7 @@ def create_app(config: Config, store: MessageStore) -> Quart:
 
     @app.route("/")
     async def index() -> Response:
-        # AIDEV-NOTE: serve the built Vue SPA bundle; no-cache so browsers always
+        # AIDEV-NOTE: serve the built Svelte SPA bundle; no-cache so browsers always
         # re-validate the HTML after an upgrade (filenames are stable, not hashed).
         html = (_PKG / "static" / "app" / "index.html").read_text()
         return Response(

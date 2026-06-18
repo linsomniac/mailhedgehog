@@ -13,7 +13,7 @@ from mailhedgehog.web import create_app
 
 # AIDEV-NOTE: Images now live under static/app/images/ (built by Vite from
 # frontend/public/images/).  The old static/images/ directory was removed in
-# Task 7 when the AngularJS UI was replaced by the Vue SPA.
+# Task 7 when the AngularJS UI was replaced by the Svelte SPA.
 _IMAGES = (
     Path(__file__).resolve().parent.parent
     / "src"
@@ -74,7 +74,7 @@ def test_old_pig_asset_is_gone():
 
 
 async def test_index_returns_built_spa_html(app):
-    """GET / returns the built Vue SPA HTML referencing app.js and app.css."""
+    """GET / returns the built Svelte SPA HTML referencing app.js and app.css."""
     resp = await app.test_client().get("/")
     assert resp.status_code == 200
     body = await resp.get_data(as_text=True)

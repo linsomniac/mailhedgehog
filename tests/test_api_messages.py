@@ -29,7 +29,7 @@ async def test_index_serves_html(app_and_store):
     resp = await client.get("/")
     assert resp.status_code == 200
     body = await resp.get_data(as_text=True)
-    # The Vue SPA uses lowercase title; check for the app mount point instead.
+    # The Svelte SPA uses lowercase title; check for the app mount point instead.
     assert "mailhedgehog" in body.lower()
 
 
