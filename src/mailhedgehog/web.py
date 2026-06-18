@@ -47,22 +47,31 @@ _PKG = Path(__file__).parent
 
 # AIDEV-NOTE: bounded per-client queues. A slow/dead UI client drops live frames
 # (it reconciles on the next /api/v2/messages refresh) and can never grow memory.
+# Each client is stored in _clients dict as queue -> wants_summary bool.
+# to_summary() is only called lazily when at least one summary client is registered.
 class WebSocketBroadcaster:
     def __init__(self, queue_size: int) -> None:
         self._queue_size = queue_size
-        self._clients: set[asyncio.Queue[str]] = set()
+        self._clients: dict[asyncio.Queue[str], bool] = {}
 
-    def register(self) -> asyncio.Queue[str]:
+    def register(self, summary: bool = False) -> asyncio.Queue[str]:
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self._queue_size)
-        self._clients.add(queue)
+        self._clients[queue] = summary
         return queue
 
     def unregister(self, queue: asyncio.Queue[str]) -> None:
-        self._clients.discard(queue)
+        self._clients.pop(queue, None)
 
     async def broadcast(self, message: Message) -> None:
-        data = json.dumps(message)
-        for queue in list(self._clients):
+        full = json.dumps(message)
+        # AIDEV-NOTE: compute slim JSON lazily — only if at least one summary client
+        # is registered. Avoids calling to_summary() on every broadcast when nobody
+        # has subscribed with ?summary=1 (the common/default case).
+        slim: str | None = None
+        if any(self._clients.values()):
+            slim = json.dumps(to_summary(message))
+        for queue, wants_summary in list(self._clients.items()):
+            data = slim if wants_summary and slim is not None else full
             try:
                 queue.put_nowait(data)
             except asyncio.QueueFull:
@@ -196,7 +205,8 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         # which never runs while the queue is empty -- leaving the browser stuck
         # showing "Disconnected" until the first email arrives.
         await websocket.accept()
-        queue = broadcaster.register()
+        summary = _is_summary(websocket.args.get("summary"))
+        queue = broadcaster.register(summary=summary)
         try:
             while True:
                 await websocket.send(await queue.get())
