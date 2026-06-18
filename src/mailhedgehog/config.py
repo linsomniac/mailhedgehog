@@ -48,6 +48,10 @@ class Config:
     debug: bool = False
     tls_cert: str | None = None
     tls_key: str | None = None
+    proxy_remote_images: bool = False
+    proxy_timeout: float = 10.0
+    proxy_max_bytes: int = 10_485_760
+    proxy_max_redirects: int = 5
 
     def __post_init__(self) -> None:
         # AIDEV-NOTE: These four knobs are the memory-safety bounds. A
@@ -60,12 +64,21 @@ class Config:
             "max_bytes": self.max_bytes,
             "max_message_size": self.max_message_size,
             "ws_queue_size": self.ws_queue_size,
+            "proxy_max_bytes": self.proxy_max_bytes,
         }
         for name, value in caps.items():
             if value < 1:
                 raise ValueError(
                     f"{name} must be a positive integer (>= 1), got {value}"
                 )
+        # AIDEV-NOTE: proxy knobs. timeout must be > 0 (a 0/negative urllib timeout
+        # is meaningless here); max_redirects may be 0 (= refuse all redirects).
+        if self.proxy_timeout <= 0:
+            raise ValueError(f"proxy_timeout must be > 0, got {self.proxy_timeout}")
+        if self.proxy_max_redirects < 0:
+            raise ValueError(
+                f"proxy_max_redirects must be >= 0, got {self.proxy_max_redirects}"
+            )
 
     @classmethod
     def from_env(cls) -> Config:
@@ -82,4 +95,8 @@ class Config:
             debug=_bool("MH_DEBUG", False),
             tls_cert=os.environ.get("MH_TLS_CERT") or None,
             tls_key=os.environ.get("MH_TLS_KEY") or None,
+            proxy_remote_images=_bool("MH_PROXY_REMOTE_IMAGES", False),
+            proxy_timeout=_float("MH_PROXY_TIMEOUT", 10.0),
+            proxy_max_bytes=_int("MH_PROXY_MAX_BYTES", 10_485_760),
+            proxy_max_redirects=_int("MH_PROXY_MAX_REDIRECTS", 5),
         )
