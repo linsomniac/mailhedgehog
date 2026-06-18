@@ -31,11 +31,39 @@ Using Python 3 / uv:
 
 * In-memory SMTP sink — messages are never relayed.
 * Bounded storage: auto-expires by message count and total size.
-* Web UI for viewing received messages.
+* Self-hosted Svelte + TypeScript SPA built with Vite — no CDN dependencies.
 * JSON/WebSocket API compatible with the original MailHog.
 * asyncio Python 3 app built on [Quart](https://quart.palletsprojects.com/).
 * Served in production by [Hypercorn](https://hypercorn.readthedocs.io/) with WebSocket keepalive pings.
 * Can run as a Docker container.
+
+### Web UI
+
+The web interface is a self-hosted Svelte + TypeScript single-page application built with Vite.
+All assets are served directly from the application — no external CDNs or network requests at
+runtime.  The JSON and WebSocket API remains fully compatible with the original MailHog.
+
+**Rebuilding the UI after changing `frontend/` source:**
+
+    cd frontend && npm ci && npm run build
+    git add src/mailhedgehog/static/app
+    git commit -m "chore(ui): rebuild committed static assets"
+
+This regenerates the committed build output under `src/mailhedgehog/static/app/`.  The required
+Node version is read from `frontend/.nvmrc` (currently Node 24).  The `frontend.yml` GitHub
+Actions workflow runs automatically on any push or pull request that touches `frontend/**` or
+`src/mailhedgehog/static/**`, and fails if the committed build output does not match a fresh
+build — ensuring the committed assets are never stale.
+
+### Memory sizing for large inboxes
+
+`MH_MAX_BYTES` caps the total **raw message bytes** stored in memory, but the process also
+holds decoded string copies of each message (the `Raw.Data` and `Content.Body` fields), so
+real RSS is meaningfully higher than `MH_MAX_BYTES` alone.
+
+Operators targeting 1 000–15 000 messages should raise both `MH_MAX_MESSAGES` and
+`MH_MAX_BYTES` and size container memory well above `MH_MAX_BYTES`.  As a rough guide,
+budget 2–3× `MH_MAX_BYTES` for the process RSS headroom.
 
 ### Anti-features
 
