@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { listMessages, searchMessages, getMessage, deleteAll, deleteMessage, emlUrl, partUrl, cidUrl } from './api.js';
+import { listMessages, searchMessages, getMessage, deleteAll, deleteMessage, emlUrl, partUrl, cidUrl, getConfig, proxyUrl } from './api.js';
 
 // AIDEV-NOTE: Tests for the typed API client.
 // We mock globalThis.fetch to intercept outgoing requests and assert URL shape + method.
@@ -148,6 +148,27 @@ describe('URL builders', () => {
 
   it('cidUrl encodes both id and cid', () => {
     expect(cidUrl('id/1', 'cid@foo')).toBe('/api/v1/messages/id%2F1/mime/cid/cid%40foo/download');
+  });
+});
+
+describe('getConfig', () => {
+  it('fetches /api/v2/config and returns the shape', async () => {
+    const mockFetch = makeFetchMock(200, { proxyRemoteImages: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const cfg = await getConfig();
+
+    const url: string = mockFetch.mock.calls[0][0] as string;
+    expect(url).toBe('/api/v2/config');
+    expect(cfg.proxyRemoteImages).toBe(true);
+  });
+});
+
+describe('proxyUrl', () => {
+  it('encodes the remote url into the proxy query param', () => {
+    expect(proxyUrl('https://h.example/a b.png?x=1&y=2')).toBe(
+      '/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fa%20b.png%3Fx%3D1%26y%3D2',
+    );
   });
 });
 

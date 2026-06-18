@@ -118,6 +118,7 @@
   let initialLoadDone = $state(false);
 
   onMount(async () => {
+    await store.loadConfig();
     await store.loadFirst();
     initialLoadDone = true;
 

@@ -55,6 +55,10 @@ function createStore() {
   let pendingNew = $state(0);
   let atTop = $state(true);
   let loading = $state(false);
+  // AIDEV-NOTE: proxyImages mirrors the server's MH_PROXY_REMOTE_IMAGES flag,
+  // fetched once at startup via loadConfig(). When true, MessageDetail rewrites
+  // remote <img> URLs through the proxy. Defaults false (direct load).
+  let proxyImages = $state(false);
   let selectError = $state<string | null>(null);
 
   // Search state
@@ -74,6 +78,18 @@ function createStore() {
       return api.searchMessages(searchKind, searchQuery, start, limit);
     }
     return api.listMessages(start, limit);
+  }
+
+  // AIDEV-NOTE: loadConfig fetches the server bootstrap config once at startup.
+  // On any failure it leaves proxyImages=false so images still attempt to load
+  // directly — graceful degradation, never a hard error.
+  async function loadConfig(): Promise<void> {
+    try {
+      const cfg = await api.getConfig();
+      proxyImages = cfg.proxyRemoteImages;
+    } catch {
+      proxyImages = false;
+    }
   }
 
   // AIDEV-NOTE: loadFirst resets the list entirely and fetches page 0.
@@ -247,6 +263,7 @@ function createStore() {
     atTop = true;
     wsStatus = 'reconnecting';
     loading = false;
+    proxyImages = false;
     selectError = null;
     searchActive = false;
     searchKind = '';
@@ -265,10 +282,12 @@ function createStore() {
     get pendingNew() { return pendingNew; },
     get atTop() { return atTop; },
     get loading() { return loading; },
+    get proxyImages() { return proxyImages; },
     get selectError() { return selectError; },
     get search() {
       return { active: searchActive, kind: searchKind, query: searchQuery };
     },
+    loadConfig,
     loadFirst,
     loadMore,
     applyLive,
