@@ -9,7 +9,12 @@ from pathlib import Path
 from quart import Quart, Response, abort, request, websocket
 
 from mailhedgehog.config import Config
-from mailhedgehog.parser import Message, decode_header_value, get_mime_part
+from mailhedgehog.parser import (
+    Message,
+    decode_header_value,
+    get_mime_part,
+    get_mime_part_by_cid,
+)
 from mailhedgehog.smtp import SmtpHandler, create_smtp_server
 from mailhedgehog.storage import KNOWN_SEARCH_KINDS, MessageStore
 
@@ -158,7 +163,10 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         return Response(
             raw,
             mimetype="message/rfc822",
-            headers={"Content-Disposition": f'attachment; filename="{msgid}.eml"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{msgid}.eml"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.route("/api/v1/messages/<msgid>/mime/part/<int:part>/download")
@@ -181,7 +189,38 @@ def create_app(config: Config, store: MessageStore) -> Quart:
             if safe_name:
                 disposition += f'; filename="{safe_name}"'
         return Response(
-            content, mimetype=content_type, headers={"Content-Disposition": disposition}
+            content,
+            mimetype=content_type,
+            headers={
+                "Content-Disposition": disposition,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    # AIDEV-NOTE: cid-based part lookup walks the full MIME tree (unlike the
+    # index-based route which only addresses top-level parts). Non-image content
+    # types are downgraded to application/octet-stream so that attacker-supplied
+    # text/html or image/svg+xml parts cannot execute same-origin scripts.
+    @app.route("/api/v1/messages/<msgid>/mime/cid/<path:cid>/download")
+    async def download_cid_part(msgid: str, cid: str) -> Response:
+        raw = store.get_raw(msgid)
+        if raw is None:
+            abort(404)
+        result = get_mime_part_by_cid(raw, cid)
+        if result is None:
+            abort(404)
+        content, content_type, _filename = result
+        # Defense: only image/* parts are served with their declared type.
+        # Any other type (text/html, image/svg+xml, …) becomes octet-stream.
+        safe_type = (
+            content_type
+            if content_type.startswith("image/")
+            else "application/octet-stream"
+        )
+        return Response(
+            content,
+            mimetype=safe_type,
+            headers={"X-Content-Type-Options": "nosniff"},
         )
 
     # AIDEV-NOTE: "release"/outgoing-smtp are intentionally unimplemented (a sink has
@@ -193,6 +232,26 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     @app.route("/api/v1/messages/<msgid>/release", methods=["POST"])
     async def release(msgid: str) -> tuple[str, int]:
         return "Not Implemented", 501
+
+    # AIDEV-NOTE: after_request is the single place we stamp security headers on
+    # every HTTP response. X-Content-Type-Options: nosniff prevents browsers from
+    # MIME-sniffing a response away from the declared content-type.  The CSP locks
+    # down script/object/base execution and prevents framing by untrusted origins.
+    # The old AngularJS index loads CDN scripts; this CSP will block them in a
+    # browser, which is intentional — the AngularJS UI is being removed in T7.
+    _CSP = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'self'"
+    )
+
+    @app.after_request
+    async def _security_headers(response: Response) -> Response:
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+        return response
 
     broadcaster = WebSocketBroadcaster(config.ws_queue_size)
     app.broadcaster = broadcaster  # type: ignore[attr-defined]

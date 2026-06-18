@@ -325,3 +325,92 @@ async def test_search_total_count_identical_summary_vs_full(app_and_store):
     assert full["total"] == slim["total"]
     assert full["count"] == slim["count"]
     assert full["start"] == slim["start"]
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (B5a): nested cid endpoint + security headers
+# ---------------------------------------------------------------------------
+
+
+async def test_cid_endpoint_resolves_nested_inline_image(app_and_store):
+    """Nested inline image (multipart/related inside multipart/alternative) is
+    returned with its image/* content-type and nosniff header."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_WITH_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_WITH_CID)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/logo/download")
+    assert resp.status_code == 200
+    body = await resp.get_data()
+    import base64
+
+    assert body == base64.b64decode(b"AAEC")
+    assert resp.content_type.startswith("image/png")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+async def test_cid_endpoint_resolves_cid_with_angle_brackets(app_and_store):
+    """CID lookup with angle brackets in the URL (URL-encoded) still resolves."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_WITH_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_WITH_CID)
+    client = app.test_client()
+    # Quart's <path:cid> receives the URL-decoded value; test with bare cid too
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/%3Clogo%3E/download")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("image/png")
+
+
+async def test_cid_endpoint_text_html_served_as_octet_stream(app_and_store):
+    """A part with Content-Type: text/html referenced by cid is served as
+    application/octet-stream (active-type downgrade) with nosniff header."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_HTML_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_HTML_CID)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/htmlpart/download")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("application/octet-stream")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+async def test_cid_endpoint_unknown_cid_returns_404(app_and_store):
+    """Requesting a cid that does not exist in the message returns 404."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_WITH_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_WITH_CID)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/nosuchcid/download")
+    assert resp.status_code == 404
+
+
+async def test_cid_endpoint_missing_message_returns_404(app_and_store):
+    """Requesting a cid for a non-existent message ID returns 404."""
+    app, store = app_and_store
+    client = app.test_client()
+    resp = await client.get("/api/v1/messages/nonexistent/mime/cid/logo/download")
+    assert resp.status_code == 404
+
+
+async def test_after_request_csp_header_on_index(app_and_store):
+    """after_request hook adds CSP and nosniff headers to all responses."""
+    app, _ = app_and_store
+    client = app.test_client()
+    resp = await client.get("/")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'self'" in csp
+
+
+async def test_after_request_csp_header_on_api_response(app_and_store):
+    """after_request hook adds CSP and nosniff headers to API JSON responses too."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp

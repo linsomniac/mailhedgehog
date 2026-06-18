@@ -121,6 +121,41 @@ def _mime_tree(msg: EmailMessage) -> Message:
     return {"Parts": [_part_dict(p) for p in parts]}
 
 
+def get_mime_part_by_cid(raw: bytes, cid: str) -> tuple[bytes, str, str | None] | None:
+    """Walk the full MIME tree and return the first part whose Content-ID matches cid.
+
+    Normalization: strip one leading '<' and trailing '>' if present, then casefold.
+    Applied to both the part's Content-ID header and the requested cid.
+
+    Returns (payload_bytes, content_type, filename) on match, None if no part matches.
+    Multipart container parts are skipped — only leaf parts are inspected.
+    """
+
+    # AIDEV-NOTE: msg.walk() yields every part depth-first, including the root.
+    # We skip multipart/* parts because they have no decodable payload and their
+    # Content-ID (if any) is not meaningful for direct data retrieval.
+    def _normalize(value: str) -> str:
+        v = value.strip()
+        if v.startswith("<") and v.endswith(">"):
+            v = v[1:-1]
+        return v.casefold()
+
+    want = _normalize(cid)
+    msg = message_from_bytes(raw)
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        raw_cid: str | None = part.get("Content-ID")
+        if raw_cid is None:
+            continue
+        if _normalize(raw_cid) == want:
+            payload = part.get_payload(decode=True) or b""
+            if not isinstance(payload, bytes):
+                payload = b""
+            return payload, part.get_content_type(), part.get_filename()
+    return None
+
+
 def get_mime_part(raw: bytes, index: int) -> tuple[bytes, str, str | None] | None:
     msg = message_from_bytes(raw)
     if not msg.is_multipart():

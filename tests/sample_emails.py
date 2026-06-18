@@ -103,6 +103,53 @@ NESTED_MULTIPART = (
 
 GARBAGE = b"\x00\x01\x02 not even close to an email \xff\xfe"
 
+# AIDEV-NOTE: A realistic CID-reference email: multipart/alternative wrapping a
+# multipart/related that contains an HTML part and an inline image with a
+# Content-ID header.  Used by Task 5 (B5a) cid-endpoint tests.
+# The image payload is the 3-byte PNG magic bytes AAEC (base64) = \x00\x01\x02.
+MULTIPART_RELATED_WITH_CID = (
+    b"From: sender@example.com\r\n"
+    b"To: recipient@example.com\r\n"
+    b"Subject: CID test\r\n"
+    b'Content-Type: multipart/alternative; boundary="ALT"\r\n'
+    b"\r\n"
+    b"--ALT\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n"
+    b"\r\n"
+    b"Plain version\r\n"
+    b"--ALT\r\n"
+    b'Content-Type: multipart/related; boundary="REL"\r\n'
+    b"\r\n"
+    b"--REL\r\n"
+    b"Content-Type: text/html; charset=utf-8\r\n"
+    b"\r\n"
+    b'<p><img src="cid:logo"></p>\r\n'
+    b"--REL\r\n"
+    b"Content-Type: image/png\r\n"
+    b"Content-Transfer-Encoding: base64\r\n"
+    b"Content-ID: <logo>\r\n"
+    b"\r\n"
+    b"AAEC\r\n"
+    b"--REL--\r\n"
+    b"--ALT--\r\n"
+)
+
+# Variant where the part declares text/html but has a Content-ID — used to
+# verify the non-image → application/octet-stream downgrade.
+MULTIPART_RELATED_HTML_CID = (
+    b"From: sender@example.com\r\n"
+    b"To: recipient@example.com\r\n"
+    b"Subject: HTML CID test\r\n"
+    b'Content-Type: multipart/related; boundary="R2"\r\n'
+    b"\r\n"
+    b"--R2\r\n"
+    b"Content-Type: text/html; charset=utf-8\r\n"
+    b"Content-ID: <htmlpart>\r\n"
+    b"\r\n"
+    b"<p>hello</p>\r\n"
+    b"--R2--\r\n"
+)
+
 MULTIPART_EVIL_FILENAME = (
     b"From: a@x.test\r\n"
     b"To: b@x.test\r\n"
