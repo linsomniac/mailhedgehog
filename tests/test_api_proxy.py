@@ -1,10 +1,12 @@
+from quart import Quart
+
 from mailhedgehog.config import Config
 from mailhedgehog.fetcher import FetchError
 from mailhedgehog.storage import MessageStore
 from mailhedgehog.web import create_app
 
 
-def _app(**cfg):
+def _app(**cfg: object) -> Quart:
     config = Config(smtp_port=0, http_port=0, **cfg)
     store = MessageStore(config.max_messages, config.max_bytes)
     return create_app(config, store)
@@ -47,6 +49,7 @@ async def test_proxy_streams_image_when_enabled(monkeypatch):
     assert (await resp.get_data()) == b"\x89PNG-bytes"
     assert resp.headers["Content-Type"].startswith("image/png")
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["Cache-Control"] == "private, max-age=300"
 
 
 async def test_proxy_502_on_fetch_error(monkeypatch):
@@ -56,4 +59,14 @@ async def test_proxy_502_on_fetch_error(monkeypatch):
     monkeypatch.setattr("mailhedgehog.web.fetch_remote_image", boom)
     client = _app(proxy_remote_images=True).test_client()
     resp = await client.get("/api/v2/proxy?url=http://10.0.0.1/a.png")
+    assert resp.status_code == 502
+
+
+async def test_proxy_502_on_unexpected_error(monkeypatch):
+    def boom(url, **kw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("mailhedgehog.web.fetch_remote_image", boom)
+    client = _app(proxy_remote_images=True).test_client()
+    resp = await client.get("/api/v2/proxy?url=http://example.com/a.png")
     assert resp.status_code == 502
