@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email import message_from_bytes
+from email.header import decode_header as _decode_header
+from email.header import make_header as _make_header
 from email.message import Message as EmailMessage
 from email.utils import parseaddr
 from typing import Any
@@ -23,6 +25,22 @@ def safe_str(value: str | bytes) -> str:
     else:
         raw = value
     return raw.decode("utf-8", "replace")
+
+
+def decode_header_value(raw: str) -> str:
+    """Decode an RFC 2047 encoded-word header value to a plain unicode string.
+
+    Never raises: any failure falls back to safe_str(raw). Result is always
+    safe_str-clean (no lone surrogates, json-serializable).
+    """
+    # AIDEV-NOTE: _decode_header returns a list of (bytes_or_str, charset) pairs.
+    # _make_header reassembles them into a str, handling charset decoding.
+    # We wrap the whole thing in try/except so garbage input never raises.
+    try:
+        decoded = str(_make_header(_decode_header(raw)))
+    except Exception:
+        return safe_str(raw)
+    return safe_str(decoded)
 
 
 def parse_addr(addr: str) -> dict[str, Any]:

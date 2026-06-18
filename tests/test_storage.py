@@ -1,9 +1,20 @@
 from mailhedgehog.storage import MessageStore
 
 
-def _msg(msg_id, raw_from="a@x.test", raw_to="b@x.test", data="hello"):
+def _msg(
+    msg_id,
+    raw_from="a@x.test",
+    raw_to="b@x.test",
+    data="hello",
+    subject: str | None = None,
+    display_from: str | None = None,
+    display_to: str | None = None,
+):
     mailbox_from, domain_from = raw_from.split("@")
     mailbox_to, domain_to = raw_to.split("@")
+    headers: dict = {}
+    if subject is not None:
+        headers["Subject"] = [subject]
     return {
         "ID": msg_id,
         "From": {
@@ -21,6 +32,7 @@ def _msg(msg_id, raw_from="a@x.test", raw_to="b@x.test", data="hello"):
             }
         ],
         "Raw": {"From": raw_from, "To": [raw_to], "Helo": "h", "Data": data},
+        "Content": {"Headers": headers, "Body": "", "Size": 0, "MIME": None},
     }
 
 
@@ -94,3 +106,131 @@ def test_search_kinds():
     result = [m["ID"] for m in store.search("containing", "hello", 0, 10)[0]]
     assert result == ["id1"]
     assert store.search("containing", "nomatch", 0, 10)[1] == 0
+
+
+# ---------------------------------------------------------------------------
+# New tests: subject search, metadata search, casefolded matching, RFC 2047
+# ---------------------------------------------------------------------------
+
+
+def test_search_subject_encoded_word():
+    """Search kind='subject' finds a message whose Subject is RFC 2047 encoded."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", subject="=?UTF-8?B?Y2Fmw6k=?=")  # "café"
+    store.add(msg, b"raw")
+    # Exact match
+    result, total = store.search("subject", "café", 0, 10)
+    assert total == 1
+    assert result[0]["ID"] == "id1"
+    # Case-insensitive match
+    result, total = store.search("subject", "CAFÉ", 0, 10)
+    assert total == 1
+    # No match
+    result, total = store.search("subject", "banana", 0, 10)
+    assert total == 0
+
+
+def test_search_subject_plain():
+    """Search kind='subject' on a plain (non-encoded) subject."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", subject="Hello World")
+    store.add(msg, b"raw")
+    result, total = store.search("subject", "hello", 0, 10)
+    assert total == 1
+    result, total = store.search("subject", "WORLD", 0, 10)
+    assert total == 1
+
+
+def test_search_subject_missing_header():
+    """Messages without a Subject header must not crash and must not match."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    # subject=None means no Subject key in headers
+    msg = _msg("id1")
+    store.add(msg, b"raw")
+    result, total = store.search("subject", "anything", 0, 10)
+    assert total == 0
+
+
+def test_search_metadata_matches_subject():
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", subject="Important Newsletter")
+    store.add(msg, b"raw")
+    result, total = store.search("metadata", "newsletter", 0, 10)
+    assert total == 1
+
+
+def test_search_metadata_matches_from():
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", raw_from="alice@example.com")
+    store.add(msg, b"raw")
+    result, total = store.search("metadata", "alice", 0, 10)
+    assert total == 1
+
+
+def test_search_metadata_matches_to():
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", raw_to="bob@example.com")
+    store.add(msg, b"raw")
+    result, total = store.search("metadata", "bob", 0, 10)
+    assert total == 1
+
+
+def test_search_metadata_no_match():
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", subject="Hello", raw_from="alice@a.test", raw_to="bob@b.test")
+    store.add(msg, b"raw")
+    result, total = store.search("metadata", "nomatch", 0, 10)
+    assert total == 0
+
+
+def test_search_composed_vs_decomposed_normalization():
+    """NFC search query must match NFC-stored subject regardless of input form."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    # café stored as plain NFC text
+    msg = _msg("id1", subject="café")
+    store.add(msg, b"raw")
+    # The spec says: needle = normalize("NFC", query.casefold()), stored = NFC too.
+    # NFC("café".casefold()) matches NFC stored "café" -> match
+    result, total = store.search("subject", "café", 0, 10)
+    assert total == 1
+    # Also verify casefolded search works
+    result, total = store.search("subject", "CAFÉ", 0, 10)
+    assert total == 1
+
+
+def test_search_from_case_insensitive():
+    """kind='from' search is now case-insensitive via casefold."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", raw_from="Alice@Example.COM")
+    store.add(msg, b"raw")
+    result, total = store.search("from", "alice@example.com", 0, 10)
+    assert total == 1
+
+
+def test_search_to_case_insensitive():
+    """kind='to' search is now case-insensitive via casefold."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", raw_to="Bob@Example.COM")
+    store.add(msg, b"raw")
+    result, total = store.search("to", "bob@example.com", 0, 10)
+    assert total == 1
+
+
+def test_search_containing_still_works_case_insensitive():
+    """kind='containing' on-demand search still works."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    msg = _msg("id1", data="Hello World")
+    store.add(msg, b"raw")
+    result, total = store.search("containing", "HELLO", 0, 10)
+    assert total == 1
+
+
+def test_subject_headers_stay_raw():
+    """Content.Headers must not be mutated — they stay in raw RFC 2047 form."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    raw_subject = "=?UTF-8?B?Y2Fmw6k=?="
+    msg = _msg("id1", subject=raw_subject)
+    store.add(msg, b"raw")
+    retrieved = store.get("id1")
+    assert retrieved is not None
+    assert retrieved["Content"]["Headers"]["Subject"][0] == raw_subject
