@@ -113,3 +113,45 @@ def test_ws_ping_interval_allows_non_positive_to_disable(monkeypatch):
 
     monkeypatch.setenv("MH_WS_PING_INTERVAL", "0")
     assert Config.from_env().ws_ping_interval == 0.0
+
+
+def test_proxy_defaults(monkeypatch):
+    for name in (
+        "MH_PROXY_REMOTE_IMAGES",
+        "MH_PROXY_TIMEOUT",
+        "MH_PROXY_MAX_BYTES",
+        "MH_PROXY_MAX_REDIRECTS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    cfg = Config.from_env()
+    assert cfg.proxy_remote_images is False
+    assert cfg.proxy_timeout == 10.0
+    assert cfg.proxy_max_bytes == 10_485_760
+    assert cfg.proxy_max_redirects == 5
+
+
+def test_proxy_reads_from_environment(monkeypatch):
+    monkeypatch.setenv("MH_PROXY_REMOTE_IMAGES", "1")
+    monkeypatch.setenv("MH_PROXY_TIMEOUT", "3.5")
+    monkeypatch.setenv("MH_PROXY_MAX_BYTES", "2048")
+    monkeypatch.setenv("MH_PROXY_MAX_REDIRECTS", "0")
+    cfg = Config.from_env()
+    assert cfg.proxy_remote_images is True
+    assert cfg.proxy_timeout == 3.5
+    assert cfg.proxy_max_bytes == 2048
+    assert cfg.proxy_max_redirects == 0
+
+
+def test_proxy_max_bytes_must_be_positive():
+    with pytest.raises(ValueError, match="proxy_max_bytes"):
+        Config(proxy_max_bytes=0)
+
+
+def test_proxy_timeout_must_be_positive():
+    with pytest.raises(ValueError, match="proxy_timeout"):
+        Config(proxy_timeout=0)
+
+
+def test_proxy_max_redirects_rejects_negative():
+    with pytest.raises(ValueError, match="proxy_max_redirects"):
+        Config(proxy_max_redirects=-1)

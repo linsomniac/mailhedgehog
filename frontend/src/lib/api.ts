@@ -72,7 +72,17 @@ export function deleteMessage(id: string): Promise<void> {
   return requestVoid(`/api/v1/messages/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+/** Fetch the SPA bootstrap config (currently just the image-proxy flag). */
+export function getConfig(): Promise<{ proxyRemoteImages: boolean }> {
+  return request<{ proxyRemoteImages: boolean }>('/api/v2/config');
+}
+
 // --- URL builders (no fetch) ---
+
+/** URL to fetch a remote image through the server-side proxy. */
+export function proxyUrl(rawUrl: string): string {
+  return `/api/v2/proxy?url=${encodeURIComponent(rawUrl)}`;
+}
 
 /** URL to download the raw .eml file for a message. */
 export function emlUrl(id: string): string {

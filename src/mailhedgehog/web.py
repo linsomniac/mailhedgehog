@@ -9,6 +9,7 @@ from pathlib import Path
 from quart import Quart, Response, abort, request, websocket
 
 from mailhedgehog.config import Config
+from mailhedgehog.fetcher import FetchError, fetch_remote_image
 from mailhedgehog.parser import (
     Message,
     decode_header_value,
@@ -159,6 +160,49 @@ def create_app(config: Config, store: MessageStore) -> Quart:
             "start": start,
             "items": items,
         }
+
+    @app.route("/api/v2/config")
+    async def client_config() -> dict[str, object]:
+        # AIDEV-NOTE: minimal bootstrap config the SPA reads once at startup.
+        # Only exposes whether the image proxy is active so the UI knows to
+        # rewrite remote <img> URLs. Additive; no auth (consistent with the API).
+        return {"proxyRemoteImages": config.proxy_remote_images}
+
+    @app.route("/api/v2/proxy")
+    async def proxy_image() -> Response:
+        # AIDEV-NOTE: opt-in remote-image proxy. Disabled -> 404 (capability off).
+        # The actual fetch is SSRF-guarded in fetcher.py and offloaded to a
+        # thread so a slow remote host can't stall the event loop. Any failure
+        # collapses to 502 -> the browser shows the same broken-image icon as
+        # when proxying is off (never worse). nosniff + short cache on success.
+        if not config.proxy_remote_images:
+            abort(404)
+        url = request.args.get("url")
+        if not url:
+            abort(400)
+        try:
+            content, content_type = await asyncio.to_thread(
+                fetch_remote_image,
+                url,
+                max_bytes=config.proxy_max_bytes,
+                timeout=config.proxy_timeout,
+                max_redirects=config.proxy_max_redirects,
+            )
+            return Response(
+                content,
+                mimetype=content_type,
+                headers={
+                    "X-Content-Type-Options": "nosniff",
+                    "Cache-Control": "private, max-age=300",
+                },
+            )
+        except FetchError:
+            abort(502)
+        except Exception:
+            # Defensive: never surface an unexpected fetch failure as a 500.
+            # This also catches ValueError from Response(mimetype=...) if a
+            # malformed content-type somehow passes through Layer 1 validation.
+            abort(502)
 
     @app.route("/api/v1/messages/<msgid>/download")
     async def download(msgid: str) -> Response:
