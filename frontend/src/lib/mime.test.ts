@@ -1,0 +1,427 @@
+// AIDEV-NOTE: Tests for mime.ts — SECURITY-CRITICAL module.
+// Covers: base64/QP/charset decoding, PartTooLargeError, buildSrcdoc sanitization,
+// cid: rewriting, CSP injection, linkify safety.
+//
+// TextDecoder in Node supports many charsets (shift_jis, iso-2022-jp, etc.) via ICU.
+// DOMParser is provided by jsdom in the test environment.
+
+import { describe, it, expect } from 'vitest';
+import {
+  decodePart,
+  PartTooLargeError,
+  findPart,
+  getPlain,
+  buildSrcdoc,
+  linkify,
+} from './mime.js';
+import type { FullMessage, MIMEPart } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeMessage(overrides: Partial<FullMessage> = {}): FullMessage {
+  return {
+    ID: 'test-id',
+    From: { Mailbox: 'sender', Domain: 'example.com', Params: '', Relays: null },
+    To: [{ Mailbox: 'rcpt', Domain: 'example.com', Params: '', Relays: null }],
+    Content: {
+      Headers: { 'Content-Type': ['text/plain; charset=utf-8'] },
+      Body: 'Hello',
+      Size: 5,
+      MIME: null,
+    },
+    MIME: null,
+    Created: new Date().toISOString(),
+    Size: 100,
+    Raw: { From: '', To: [], Helo: '', Data: '' },
+    ...overrides,
+  };
+}
+
+function makePart(
+  contentType: string,
+  body: string,
+  encoding?: string,
+  subParts?: MIMEPart[],
+): MIMEPart {
+  const headers: { [key: string]: string[] } = {
+    'Content-Type': [contentType],
+  };
+  if (encoding) {
+    headers['Content-Transfer-Encoding'] = [encoding];
+  }
+  return {
+    Headers: headers,
+    Body: body,
+    Size: body.length,
+    MIME: subParts ? { Parts: subParts } : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// decodePart — base64
+// ---------------------------------------------------------------------------
+
+describe('decodePart: base64', () => {
+  it('decodes a simple base64 utf-8 string', () => {
+    // "Hello, World!" base64 encoded
+    const encoded = btoa('Hello, World!');
+    expect(decodePart(encoded, 'base64', 'utf-8')).toBe('Hello, World!');
+  });
+
+  it('handles base64 with line breaks (RFC 2045 style)', () => {
+    const raw = 'Hello, World!';
+    // Add line breaks as email would have
+    const encoded = btoa(raw).replace(/.{10}/g, '$&\r\n');
+    expect(decodePart(encoded, 'base64', 'utf-8')).toBe(raw);
+  });
+
+  it('decodes base64 with utf-8 multi-byte characters', () => {
+    const text = 'Héllo Wörld';
+    const encoded = btoa(
+      Array.from(new TextEncoder().encode(text))
+        .map((b) => String.fromCharCode(b))
+        .join(''),
+    );
+    expect(decodePart(encoded, 'base64', 'utf-8')).toBe(text);
+  });
+
+  it('returns fallback text on malformed base64 (does not throw)', () => {
+    const result = decodePart('!!!not-base64!!!', 'base64', 'utf-8');
+    expect(result).toContain('[base64 decode error');
+    expect(result).toContain('!!!not-base64!!!');
+  });
+
+  it('throws PartTooLargeError when decoded size exceeds maxBytes', () => {
+    // Create base64 of 100 bytes; set maxBytes to 50
+    const bytes = new Uint8Array(100).fill(65); // 100 'A' bytes
+    const binStr = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+    const encoded = btoa(binStr);
+    expect(() => decodePart(encoded, 'base64', 'utf-8', 50)).toThrow(PartTooLargeError);
+  });
+
+  it('PartTooLargeError carries correct byte counts', () => {
+    const bytes = new Uint8Array(200).fill(65);
+    const binStr = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+    const encoded = btoa(binStr);
+    try {
+      decodePart(encoded, 'base64', 'utf-8', 50);
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(PartTooLargeError);
+      const e = err as PartTooLargeError;
+      expect(e.byteLength).toBeGreaterThan(50);
+      expect(e.maxBytes).toBe(50);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decodePart — quoted-printable
+// ---------------------------------------------------------------------------
+
+describe('decodePart: quoted-printable', () => {
+  it('decodes simple QP with =XX hex sequences', () => {
+    // "Héllo" where é = 0xC3 0xA9 in utf-8
+    // H=C3=A9llo
+    const result = decodePart('H=C3=A9llo', 'quoted-printable', 'utf-8');
+    expect(result).toBe('Héllo');
+  });
+
+  it('removes soft line breaks (=\\r\\n)', () => {
+    const qp = 'Hello,=\r\n World!';
+    expect(decodePart(qp, 'quoted-printable', 'utf-8')).toBe('Hello, World!');
+  });
+
+  it('removes soft line breaks (=\\n without CR)', () => {
+    const qp = 'Hello,=\n World!';
+    expect(decodePart(qp, 'quoted-printable', 'utf-8')).toBe('Hello, World!');
+  });
+
+  it('does NOT replace literal underscores with spaces (body QP, not RFC2047)', () => {
+    const qp = 'hello_world';
+    expect(decodePart(qp, 'quoted-printable', 'utf-8')).toBe('hello_world');
+  });
+
+  it('throws PartTooLargeError when input exceeds maxBytes', () => {
+    const longBody = 'A'.repeat(200);
+    expect(() => decodePart(longBody, 'quoted-printable', 'utf-8', 100)).toThrow(PartTooLargeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decodePart — charset handling
+// ---------------------------------------------------------------------------
+
+describe('decodePart: charset handling', () => {
+  it('decodes shift_jis encoded base64', () => {
+    // "テスト" in Shift-JIS
+    const shiftJisBytes = new Uint8Array([0x83, 0x65, 0x83, 0x58, 0x83, 0x67]);
+    const binStr = Array.from(shiftJisBytes, (b) => String.fromCharCode(b)).join('');
+    const encoded = btoa(binStr);
+    const result = decodePart(encoded, 'base64', 'shift_jis');
+    // Should decode to Japanese katakana テスト
+    expect(result).toBe('テスト');
+  });
+
+  it('decodes iso-2022-jp encoded base64', () => {
+    // "テスト" in ISO-2022-JP: ESC $ B + JIS codes + ESC ( B
+    // テ = 0x25 0x46, ス = 0x25 0x39, ト = 0x25 0x48 in JIS X 0208
+    const iso2022Bytes = new Uint8Array([
+      0x1b, 0x24, 0x42, // ESC $ B
+      0x25, 0x46,       // テ
+      0x25, 0x39,       // ス
+      0x25, 0x48,       // ト
+      0x1b, 0x28, 0x42, // ESC ( B
+    ]);
+    const binStr = Array.from(iso2022Bytes, (b) => String.fromCharCode(b)).join('');
+    const encoded = btoa(binStr);
+    const result = decodePart(encoded, 'base64', 'iso-2022-jp');
+    expect(result).toBe('テスト');
+  });
+
+  it('falls back to utf-8 for unknown charset without throwing', () => {
+    const encoded = btoa('Hello');
+    // Should not throw even with an unknown charset
+    expect(() => decodePart(encoded, 'base64', 'x-totally-unknown-charset-42')).not.toThrow();
+  });
+
+  it('returns body as-is for 7bit encoding', () => {
+    expect(decodePart('Hello World', '7bit', 'utf-8')).toBe('Hello World');
+  });
+
+  it('returns body as-is for 8bit encoding', () => {
+    expect(decodePart('Hello World', '8bit', 'utf-8')).toBe('Hello World');
+  });
+
+  it('returns body as-is for binary encoding', () => {
+    expect(decodePart('Hello World', 'binary', 'utf-8')).toBe('Hello World');
+  });
+
+  it('returns body as-is for undefined encoding', () => {
+    expect(decodePart('Hello World', undefined, undefined)).toBe('Hello World');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findPart / getHtml / getPlain
+// ---------------------------------------------------------------------------
+
+describe('findPart', () => {
+  it('finds text/plain in Content for a simple message', () => {
+    const msg = makeMessage();
+    const part = findPart(msg, 'text/plain');
+    expect(part).not.toBeNull();
+    expect(part!.Body).toBe('Hello');
+  });
+
+  it('returns null when no matching part exists', () => {
+    const msg = makeMessage();
+    expect(findPart(msg, 'text/html')).toBeNull();
+  });
+
+  it('finds text/html in a multipart MIME tree', () => {
+    const htmlPart = makePart('text/html; charset=utf-8', '<h1>Hi</h1>');
+    const plainPart = makePart('text/plain; charset=utf-8', 'Hi');
+    const msg = makeMessage({
+      Content: {
+        Headers: { 'Content-Type': ['multipart/alternative'] },
+        Body: '',
+        Size: 0,
+        MIME: { Parts: [plainPart, htmlPart] },
+      },
+      MIME: { Parts: [plainPart, htmlPart] },
+    });
+    const found = findPart(msg, 'text/html');
+    expect(found).not.toBeNull();
+    expect(found!.Body).toBe('<h1>Hi</h1>');
+  });
+
+  it('finds nested text/plain in deeply nested MIME', () => {
+    const inner = makePart('text/plain', 'Deep plain');
+    const middle: MIMEPart = {
+      Headers: { 'Content-Type': ['multipart/mixed'] },
+      Body: '',
+      Size: 0,
+      MIME: { Parts: [inner] },
+    };
+    const msg = makeMessage({
+      Content: {
+        Headers: { 'Content-Type': ['multipart/mixed'] },
+        Body: '',
+        Size: 0,
+        MIME: null,
+      },
+      MIME: { Parts: [middle] },
+    });
+    const found = findPart(msg, 'text/plain');
+    expect(found).not.toBeNull();
+    expect(found!.Body).toBe('Deep plain');
+  });
+});
+
+describe('getPlain / getHtml', () => {
+  it('getPlain decodes a base64 plain part', () => {
+    const encoded = btoa('Plain text body');
+    const part = makePart('text/plain; charset=utf-8', encoded, 'base64');
+    const msg = makeMessage({ MIME: { Parts: [part] }, Content: { Headers: { 'Content-Type': ['multipart/mixed'] }, Body: '', Size: 0, MIME: null } });
+    // findPart will fall through to MIME tree
+    expect(getPlain(msg)).toBe('Plain text body');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSrcdoc — sanitization
+// ---------------------------------------------------------------------------
+
+describe('buildSrcdoc', () => {
+  const mockCidUrl = (id: string, cid: string) =>
+    `/api/v1/messages/${id}/mime/cid/${encodeURIComponent(cid)}/download`;
+
+  it('removes all <script> elements', () => {
+    const html = '<html><body><script>alert("xss")<\/script><p>Hello</p></body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).not.toContain('<script');
+    expect(result).not.toContain('alert("xss")');
+    expect(result).toContain('<p>Hello</p>');
+  });
+
+  it('removes all <base> elements', () => {
+    const html = '<html><head><base href="https://evil.com/"></head><body>Hi</body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).not.toContain('<base');
+  });
+
+  it('injects CSP meta tag in <head>', () => {
+    const html = '<html><head><title>Test</title></head><body>Hi</body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).toContain('http-equiv');
+    expect(result).toContain('Content-Security-Policy');
+    expect(result).toContain("script-src 'none'");
+    expect(result).toContain("form-action 'none'");
+  });
+
+  it('CSP meta is first child of <head>', () => {
+    const html = '<html><head><title>Test</title></head><body>Hi</body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    // The CSP meta should come before the title
+    const cspPos = result.indexOf('Content-Security-Policy');
+    const titlePos = result.indexOf('<title>');
+    expect(cspPos).toBeLessThan(titlePos);
+  });
+
+  it('rewrites cid: img src to API URL', () => {
+    const html = '<html><body><img src="cid:logo@example.com"></body></html>';
+    const result = buildSrcdoc(html, 'msg-abc', mockCidUrl);
+    expect(result).toContain('/api/v1/messages/msg-abc/mime/cid/');
+    expect(result).not.toContain('cid:logo');
+  });
+
+  it('rewrites cid: case-insensitively (CID:)', () => {
+    const html = '<html><body><img src="CID:logo@example.com"></body></html>';
+    const result = buildSrcdoc(html, 'msg-abc', mockCidUrl);
+    expect(result).toContain('/api/v1/messages/msg-abc/mime/cid/');
+    expect(result).not.toContain('CID:logo');
+  });
+
+  it('does NOT rewrite non-cid URLs', () => {
+    const html = '<html><body><img src="https://example.com/img.png"></body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).toContain('https://example.com/img.png');
+  });
+
+  it('returns a string starting with <!doctype html>', () => {
+    const html = '<html><body>Hi</body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result.startsWith('<!doctype html>')).toBe(true);
+  });
+
+  it('removes multiple scripts', () => {
+    const html =
+      '<html><head><script>a()<\/script></head><body><script>b()<\/script></body></html>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).not.toContain('<script');
+    expect(result).not.toContain('a()');
+    expect(result).not.toContain('b()');
+  });
+
+  it('strips angle brackets from cid values', () => {
+    // Some emails encode cid as cid:<content-id@host>
+    const html = '<html><body><img src="cid:&lt;logo@example.com&gt;"></body></html>';
+    const result = buildSrcdoc(html, 'msg-xyz', mockCidUrl);
+    // Should resolve to a URL, not have cid: in src
+    expect(result).not.toContain('cid:');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// linkify — safety and token structure
+// ---------------------------------------------------------------------------
+
+describe('linkify', () => {
+  it('produces a link token for an http URL', () => {
+    const tokens = linkify('Visit http://example.com today');
+    const link = tokens.find((t) => t.type === 'link');
+    expect(link).toBeTruthy();
+    expect(link!.href).toBe('http://example.com');
+  });
+
+  it('produces a link token for an https URL', () => {
+    const tokens = linkify('See https://example.com/path?q=1');
+    const link = tokens.find((t) => t.type === 'link');
+    expect(link).toBeTruthy();
+    expect(link!.href).toContain('https://example.com');
+  });
+
+  it('produces a link token for a mailto: URL', () => {
+    const tokens = linkify('Email mailto:user@example.com now');
+    const link = tokens.find((t) => t.type === 'link');
+    expect(link).toBeTruthy();
+    expect(link!.href).toBe('mailto:user@example.com');
+  });
+
+  it('does NOT produce a link token for javascript: (security)', () => {
+    const tokens = linkify('Click javascript:alert(1)');
+    expect(tokens.every((t) => t.type === 'text')).toBe(true);
+  });
+
+  it('does NOT produce a link token for data: (security)', () => {
+    const tokens = linkify('See data:text/html,<script>alert(1)<\/script>');
+    expect(tokens.every((t) => t.type === 'text')).toBe(true);
+  });
+
+  it('preserves surrounding text as text tokens', () => {
+    const tokens = linkify('Hello http://example.com world');
+    expect(tokens[0]).toEqual({ type: 'text', value: 'Hello ' });
+    expect(tokens[1]).toMatchObject({ type: 'link', href: 'http://example.com' });
+    expect(tokens[2]).toEqual({ type: 'text', value: ' world' });
+  });
+
+  it('handles text with no URLs as a single text token', () => {
+    const tokens = linkify('No links here!');
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toEqual({ type: 'text', value: 'No links here!' });
+  });
+
+  it('handles empty string', () => {
+    const tokens = linkify('');
+    expect(tokens).toHaveLength(0);
+  });
+
+  it('handles multiple URLs', () => {
+    const tokens = linkify('http://a.com and https://b.com');
+    const links = tokens.filter((t) => t.type === 'link');
+    expect(links).toHaveLength(2);
+  });
+
+  it('text tokens preserve original content — no HTML injection', () => {
+    const text = 'Hello <script>alert("xss")</script>';
+    const tokens = linkify(text);
+    // All tokens are text type; NO link was generated
+    expect(tokens.every((t) => t.type === 'text')).toBe(true);
+    // The literal angle brackets are preserved (component renders as text, not HTML)
+    const combined = tokens.map((t) => t.value).join('');
+    expect(combined).toBe(text);
+  });
+});
