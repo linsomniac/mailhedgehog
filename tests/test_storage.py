@@ -253,3 +253,77 @@ def test_subject_headers_stay_raw():
     retrieved = store.get("id1")
     assert retrieved is not None
     assert retrieved["Content"]["Headers"]["Subject"][0] == raw_subject
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (B2): O(limit) pagination, kind allowlist, clamps, threaded search
+# ---------------------------------------------------------------------------
+
+
+def test_list_start_beyond_total_returns_empty_with_correct_total():
+    """start >= total: items is empty but total reflects the real count."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    for i in range(3):
+        store.add(_msg(f"id{i}"), b"x")
+    items, total = store.list(100, 50)
+    assert items == []
+    assert total == 3
+
+
+def test_list_negative_start_clamps_to_zero():
+    """Negative start must be treated as 0 (return from the newest)."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    for i in range(3):
+        store.add(_msg(f"id{i}"), b"x")
+    items_neg, total_neg = store.list(-5, 2)
+    items_zero, total_zero = store.list(0, 2)
+    assert total_neg == total_zero == 3
+    assert [m["ID"] for m in items_neg] == [m["ID"] for m in items_zero]
+
+
+def test_delete_middle_keeps_newest_first_order():
+    """Deleting a non-boundary message keeps the remaining order correct."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    for i in range(5):
+        store.add(_msg(f"id{i}"), b"x")
+    # Delete the middle-ish message
+    store.delete("id2")
+    items, total = store.list(0, 10)
+    assert total == 4
+    assert [m["ID"] for m in items] == ["id4", "id3", "id1", "id0"]
+
+
+def test_search_unknown_kind_raises_value_error():
+    """search() with an unknown kind must raise ValueError, not silently scan."""
+    from mailhedgehog.storage import KNOWN_SEARCH_KINDS
+
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    store.add(_msg("id1"), b"x")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown search kind"):
+        store.search("bogus_kind", "query", 0, 10)
+
+    # Confirm the set exported from the module is correct
+    assert KNOWN_SEARCH_KINDS == {"from", "to", "containing", "subject", "metadata"}
+
+
+def test_search_newest_first_order():
+    """search() results must be newest-first within the matched set."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    for i in range(5):
+        store.add(_msg(f"id{i}", data="hello"), b"x")
+    items, total = store.search("containing", "hello", 0, 10)
+    assert total == 5
+    assert [m["ID"] for m in items] == ["id4", "id3", "id2", "id1", "id0"]
+
+
+def test_search_start_beyond_total_returns_empty_with_correct_total():
+    """search() with start >= total_matches: items empty, total is the match count."""
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    for i in range(3):
+        store.add(_msg(f"id{i}", data="findme"), b"x")
+    items, total = store.search("containing", "findme", 100, 50)
+    assert items == []
+    assert total == 3

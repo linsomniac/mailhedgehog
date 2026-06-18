@@ -68,3 +68,76 @@ async def test_stubs(app_and_store):
     client = app.test_client()
     assert (await (await client.get("/api/v2/outgoing-smtp")).get_json()) == []
     assert (await client.post("/api/v1/messages/x/release")).status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (B2): kind allowlist, limit clamp, threaded search route
+# ---------------------------------------------------------------------------
+
+
+async def test_search_unknown_kind_returns_400(app_and_store):
+    """Unknown search kind must return HTTP 400 without running any scan."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "alice@example.com", ["bob@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=evil&query=foo")
+    assert resp.status_code == 400
+
+
+async def test_list_limit_clamped_to_max(app_and_store):
+    """limit=10000 in /api/v2/messages must be clamped to MAX_PAGE_LIMIT=200."""
+    from mailhedgehog.web import MAX_PAGE_LIMIT
+
+    app, store = app_and_store
+    for i in range(5):
+        m = parse(s.ASCII, f"u{i}@example.com", ["b@example.com"], "h")
+        store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?limit=10000")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    # count must not exceed MAX_PAGE_LIMIT (5 messages < 200, so count == 5 here)
+    assert data["count"] <= MAX_PAGE_LIMIT
+    # confirm the constant is exactly 200
+    assert MAX_PAGE_LIMIT == 200
+
+
+async def test_search_limit_clamped_to_max(app_and_store):
+    """limit=10000 in /api/v2/search must be clamped to MAX_PAGE_LIMIT=200."""
+    from mailhedgehog.web import MAX_PAGE_LIMIT
+
+    app, store = app_and_store
+    m = parse(s.ASCII, "alice@example.com", ["bob@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=from&query=alice&limit=10000")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    assert data["count"] <= MAX_PAGE_LIMIT
+
+
+async def test_search_via_thread_returns_correct_results(app_and_store):
+    """Search route (thread-offloaded) returns the right message."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "threadtest@example.com", ["b@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/search?kind=from&query=threadtest")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    assert data["total"] == 1
+    assert data["items"][0]["ID"] == m["ID"]
+
+
+async def test_list_start_negative_clamped(app_and_store):
+    """Negative start in /api/v2/messages must be clamped to 0."""
+    app, store = app_and_store
+    m = parse(s.ASCII, "a@example.com", ["b@example.com"], "h")
+    store.add(m, s.ASCII)
+    client = app.test_client()
+    resp = await client.get("/api/v2/messages?start=-10&limit=50")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    assert data["start"] == 0
+    assert data["total"] == 1

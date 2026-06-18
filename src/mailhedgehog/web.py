@@ -11,7 +11,11 @@ from quart import Quart, Response, abort, request, websocket
 from mailhedgehog.config import Config
 from mailhedgehog.parser import Message, get_mime_part
 from mailhedgehog.smtp import SmtpHandler, create_smtp_server
-from mailhedgehog.storage import MessageStore
+from mailhedgehog.storage import KNOWN_SEARCH_KINDS, MessageStore
+
+# AIDEV-NOTE: hard cap on page size to keep list and search responses bounded.
+# Requests with limit > MAX_PAGE_LIMIT are silently clamped, not rejected.
+MAX_PAGE_LIMIT = 200
 
 _PKG = Path(__file__).parent
 
@@ -53,13 +57,13 @@ def create_app(config: Config, store: MessageStore) -> Quart:
 
     @app.route("/api/v2/messages")
     async def list_messages() -> dict[str, object]:
-        start = request.args.get("start", 0, type=int)
-        limit = request.args.get("limit", 50, type=int)
+        start = max(request.args.get("start", 0, type=int), 0)
+        limit = min(max(request.args.get("limit", 50, type=int), 0), MAX_PAGE_LIMIT)
         items, total = store.list(start, limit)
         return {
             "total": total,
             "count": len(items),
-            "start": max(start, 0),
+            "start": start,
             "items": items,
         }
 
@@ -85,13 +89,18 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     async def search() -> dict[str, object]:
         kind = request.args.get("kind", "containing")
         query = request.args.get("query", "")
-        start = request.args.get("start", 0, type=int)
-        limit = request.args.get("limit", 50, type=int)
-        items, total = store.search(kind, query, start, limit)
+        start = max(request.args.get("start", 0, type=int), 0)
+        limit = min(max(request.args.get("limit", 50, type=int), 0), MAX_PAGE_LIMIT)
+        # AIDEV-NOTE: validate kind BEFORE spawning a thread so bad requests fail fast.
+        if kind not in KNOWN_SEARCH_KINDS:
+            abort(400)
+        # AIDEV-NOTE: body search ("containing") can be CPU-heavy on large stores.
+        # Run the entire scan off the event loop so the ASGI worker stays unblocked.
+        items, total = await asyncio.to_thread(store.search, kind, query, start, limit)
         return {
             "total": total,
             "count": len(items),
-            "start": max(start, 0),
+            "start": start,
             "items": items,
         }
 
