@@ -184,18 +184,37 @@ def test_search_metadata_no_match():
 
 
 def test_search_composed_vs_decomposed_normalization():
-    """NFC search query must match NFC-stored subject regardless of input form."""
+    """NFC normalization allows composed and decomposed forms to match."""
+    import unicodedata
+
     store = MessageStore(max_messages=10, max_bytes=1_000_000)
-    # café stored as plain NFC text
-    msg = _msg("id1", subject="café")
-    store.add(msg, b"raw")
-    # The spec says: needle = normalize("NFC", query.casefold()), stored = NFC too.
-    # NFC("café".casefold()) matches NFC stored "café" -> match
-    result, total = store.search("subject", "café", 0, 10)
-    assert total == 1
-    # Also verify casefolded search works
+
+    # Message 1: subject in DECOMPOSED form (NFD): e + combining acute
+    decomposed = unicodedata.normalize("NFD", "café")
+    msg1 = _msg("id1", subject=decomposed)
+    store.add(msg1, b"raw1")
+
+    # Message 2: subject in COMPOSED form (NFC): é as single codepoint
+    composed = unicodedata.normalize("NFC", "café")
+    msg2 = _msg("id2", subject=composed)
+    store.add(msg2, b"raw2")
+
+    # Verify they are genuinely different byte representations
+    assert decomposed != composed, "Test setup: decomposed and composed must differ"
+
+    # Search with COMPOSED query finds the DECOMPOSED stored subject
+    result, total = store.search("subject", composed, 0, 10)
+    assert total == 2, f"Composed query should find both messages; got {total}"
+    assert any(m["ID"] == "id1" for m in result), "Should find decomposed message"
+    assert any(m["ID"] == "id2" for m in result), "Should find composed message"
+
+    # Search with DECOMPOSED query also finds the COMPOSED stored subject
+    result, total = store.search("subject", decomposed, 0, 10)
+    assert total == 2, f"Decomposed query should find both messages; got {total}"
+
+    # Case-insensitive match also works across forms
     result, total = store.search("subject", "CAFÉ", 0, 10)
-    assert total == 1
+    assert total == 2, "Case-insensitive search should find both forms"
 
 
 def test_search_from_case_insensitive():

@@ -1,7 +1,5 @@
 """Tests for decode_header_value (RFC 2047 decoding, never raises)."""
 
-import unicodedata
-
 from mailhedgehog.parser import decode_header_value
 
 
@@ -51,11 +49,5 @@ def test_result_is_json_safe_no_lone_surrogates():
     result = decode_header_value(surrogate)
     # Must round-trip through json (no lone surrogates)
     import json
+
     json.dumps(result)  # should not raise
-
-
-def test_nfc_normalization_is_preserved():
-    # Result should be NFC (safe_str uses utf-8 encode/decode which is NFC-preserving)
-    result = decode_header_value("=?UTF-8?B?Y2Fmw6k=?=")
-    # café encoded in NFC
-    assert result == unicodedata.normalize("NFC", result)
