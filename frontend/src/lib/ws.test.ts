@@ -88,6 +88,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('connect() — URL construction', () => {
+  it('uses ws: scheme when protocol is http:', () => {
+    const opts = makeOpts({ location: { protocol: 'http:', host: 'mail.example.com' } });
+    connect(opts);
+    expect(MockWebSocket.instances[0].url).toBe('ws://mail.example.com/api/v2/websocket?summary=1');
+  });
+
+  it('uses wss: scheme when protocol is https:', () => {
+    const opts = makeOpts({ location: { protocol: 'https:', host: 'mail.example.com:8443' } });
+    connect(opts);
+    expect(MockWebSocket.instances[0].url).toBe('wss://mail.example.com:8443/api/v2/websocket?summary=1');
+  });
+});
+
 describe('connect() — initial connection', () => {
   it('creates a WebSocket immediately', () => {
     const opts = makeOpts();

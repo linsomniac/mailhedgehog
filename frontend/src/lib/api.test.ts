@@ -13,6 +13,21 @@ function makeFetchMock(status: number, body: unknown) {
   });
 }
 
+/**
+ * Mock that simulates a real DELETE response: plain-text "OK" body.
+ * Calling .json() would throw SyntaxError — exactly like the real backend.
+ * AIDEV-NOTE: This keeps delete tests realistic so they catch regressions
+ * where requestVoid accidentally calls res.json() on plain-text bodies.
+ */
+function makeDeleteFetchMock(status: number) {
+  return vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    json: () => Promise.reject(new SyntaxError("Unexpected token 'O', \"OK\" is not valid JSON")),
+  });
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -83,26 +98,42 @@ describe('getMessage', () => {
 });
 
 describe('deleteAll', () => {
-  it('sends DELETE to /api/v1/messages', async () => {
-    const mockFetch = makeFetchMock(200, null);
+  it('sends DELETE to /api/v1/messages and resolves even when body is not JSON', async () => {
+    // AIDEV-NOTE: Uses makeDeleteFetchMock so .json() throws SyntaxError (real backend behavior).
+    // If requestVoid ever accidentally calls .json(), this test will fail.
+    const mockFetch = makeDeleteFetchMock(200);
     vi.stubGlobal('fetch', mockFetch);
 
-    await deleteAll();
-
+    await expect(deleteAll()).resolves.toBeUndefined();
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/messages', { method: 'DELETE' });
+  });
+
+  it('throws with HTTP status on non-2xx DELETE', async () => {
+    const mockFetch = makeDeleteFetchMock(500);
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(deleteAll()).rejects.toThrow('HTTP 500');
   });
 });
 
 describe('deleteMessage', () => {
-  it('sends DELETE to correct URL with encoded id', async () => {
-    const mockFetch = makeFetchMock(200, null);
+  it('sends DELETE to correct URL with encoded id and resolves even when body is not JSON', async () => {
+    // AIDEV-NOTE: Uses makeDeleteFetchMock so .json() throws SyntaxError (real backend behavior).
+    // If requestVoid ever accidentally calls .json(), this test will fail.
+    const mockFetch = makeDeleteFetchMock(200);
     vi.stubGlobal('fetch', mockFetch);
 
-    await deleteMessage('msg id/1');
-
+    await expect(deleteMessage('msg id/1')).resolves.toBeUndefined();
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/v1/messages/msg%20id%2F1');
     expect(init.method).toBe('DELETE');
+  });
+
+  it('throws with HTTP status on non-2xx DELETE for a single message', async () => {
+    const mockFetch = makeDeleteFetchMock(404);
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(deleteMessage('gone')).rejects.toThrow('HTTP 404');
   });
 });
 

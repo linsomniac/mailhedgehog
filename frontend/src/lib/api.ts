@@ -2,6 +2,10 @@
 // All query params are encoded via URLSearchParams; path segments use encodeURIComponent.
 // Throws an Error with the HTTP status text on non-2xx responses.
 // URL builders return plain strings (no fetch side-effects) so they can be used in <a href>.
+//
+// Two fetch helpers:
+//   request<T>  — for JSON-returning endpoints (GET); calls res.json().
+//   requestVoid — for DELETE endpoints that return plain-text "OK"; never calls res.json().
 
 import type { FullMessage, Page, Summary } from './types.js';
 
@@ -11,6 +15,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`HTTP ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+// AIDEV-NOTE: Use requestVoid for DELETE calls whose backend returns plain-text "OK" (not JSON).
+// Calling res.json() on a plain-text body throws SyntaxError in real browsers.
+async function requestVoid(url: string, init?: RequestInit): Promise<void> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  }
+  // Intentionally do NOT read or parse the body — backend returns plain-text "OK".
 }
 
 /** Fetch a paginated list of message summaries. */
@@ -50,12 +64,12 @@ export function getMessage(id: string): Promise<FullMessage> {
 
 /** Delete ALL stored messages. */
 export function deleteAll(): Promise<void> {
-  return request<void>('/api/v1/messages', { method: 'DELETE' });
+  return requestVoid('/api/v1/messages', { method: 'DELETE' });
 }
 
 /** Delete a single message by ID. */
 export function deleteMessage(id: string): Promise<void> {
-  return request<void>(`/api/v1/messages/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  return requestVoid(`/api/v1/messages/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // --- URL builders (no fetch) ---

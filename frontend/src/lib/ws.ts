@@ -25,6 +25,12 @@ export interface ConnectOpts {
   WebSocketImpl?: typeof WebSocket;
   /** Injectable RNG; defaults to Math.random. Receives current attempt count. */
   rng?: () => number;
+  /**
+   * Injectable location object for tests to override protocol/host.
+   * Defaults to globalThis.location.
+   * AIDEV-NOTE: Allows unit tests to assert the full ws/wss URL is constructed correctly.
+   */
+  location?: { protocol: string; host: string };
 }
 
 export interface Connection {
@@ -37,6 +43,7 @@ const CAP_MS = 30_000;
 export function connect(opts: ConnectOpts): Connection {
   const WS = opts.WebSocketImpl ?? globalThis.WebSocket;
   const rng = opts.rng ?? Math.random;
+  const loc = opts.location ?? globalThis.location;
 
   let closed = false;
   let attempt = 0;
@@ -72,8 +79,8 @@ export function connect(opts: ConnectOpts): Connection {
   }
 
   function buildWsUrl(): string {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/api/v2/websocket?summary=1`;
+    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${loc.host}/api/v2/websocket?summary=1`;
   }
 
   function openSocket(): void {
