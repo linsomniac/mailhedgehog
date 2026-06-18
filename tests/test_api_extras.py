@@ -392,20 +392,51 @@ async def test_cid_endpoint_missing_message_returns_404(app_and_store):
     assert resp.status_code == 404
 
 
+async def test_cid_endpoint_svg_served_as_octet_stream(app_and_store):
+    """A cid-referenced SVG part (image/svg+xml) is served as application/octet-stream
+    with nosniff header to prevent script execution via the image/* prefix bypass."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_SVG_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_SVG_CID)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/mySvg/download")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("application/octet-stream")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+async def test_cid_endpoint_png_still_served_as_image(app_and_store):
+    """Confirm that raster image/* types (e.g. image/png) are still served
+    with their declared type when referenced by cid."""
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_WITH_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_WITH_CID)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/logo/download")
+    assert resp.status_code == 200
+    assert resp.content_type.startswith("image/png")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
 async def test_after_request_csp_header_on_index(app_and_store):
-    """after_request hook adds CSP and nosniff headers to all responses."""
+    """after_request hook adds full CSP and nosniff headers to all responses."""
     app, _ = app_and_store
     client = app.test_client()
     resp = await client.get("/")
     assert resp.headers.get("X-Content-Type-Options") == "nosniff"
     csp = resp.headers.get("Content-Security-Policy", "")
-    assert "default-src 'self'" in csp
-    assert "object-src 'none'" in csp
-    assert "frame-ancestors 'self'" in csp
+    expected_csp = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'self'"
+    )
+    assert csp == expected_csp
 
 
 async def test_after_request_csp_header_on_api_response(app_and_store):
-    """after_request hook adds CSP and nosniff headers to API JSON responses too."""
+    """after_request hook adds full CSP and nosniff headers to API responses."""
     app, store = app_and_store
     m = parse(s.ASCII, "a@x.test", ["b@x.test"], "h")
     store.add(m, s.ASCII)
@@ -413,4 +444,11 @@ async def test_after_request_csp_header_on_api_response(app_and_store):
     resp = await client.get("/api/v2/messages")
     assert resp.headers.get("X-Content-Type-Options") == "nosniff"
     csp = resp.headers.get("Content-Security-Policy", "")
-    assert "default-src 'self'" in csp
+    expected_csp = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'self'"
+    )
+    assert csp == expected_csp

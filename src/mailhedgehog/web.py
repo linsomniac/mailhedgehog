@@ -210,11 +210,16 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         if result is None:
             abort(404)
         content, content_type, _filename = result
-        # Defense: only image/* parts are served with their declared type.
-        # Any other type (text/html, image/svg+xml, …) becomes octet-stream.
+        # Only raster image/* types keep their declared type; image/svg+xml
+        # (script-capable) and all other types are served as application/octet-stream
+        # so a malicious part can't be rendered as active content.
+        content_type_lower = content_type.lower()
         safe_type = (
             content_type
-            if content_type.startswith("image/")
+            if (
+                content_type_lower.startswith("image/")
+                and content_type_lower != "image/svg+xml"
+            )
             else "application/octet-stream"
         )
         return Response(

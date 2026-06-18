@@ -150,6 +150,27 @@ MULTIPART_RELATED_HTML_CID = (
     b"--R2--\r\n"
 )
 
+# Multipart with SVG CID part — used to verify that image/svg+xml (script-capable)
+# is downgraded to application/octet-stream in cid endpoint.
+MULTIPART_RELATED_SVG_CID = (
+    b"From: sender@example.com\r\n"
+    b"To: recipient@example.com\r\n"
+    b"Subject: SVG CID test\r\n"
+    b'Content-Type: multipart/related; boundary="SVG"\r\n'
+    b"\r\n"
+    b"--SVG\r\n"
+    b"Content-Type: text/html; charset=utf-8\r\n"
+    b"\r\n"
+    b'<p><img src="cid:mySvg"></p>\r\n'
+    b"--SVG\r\n"
+    b"Content-Type: image/svg+xml\r\n"
+    b"Content-Transfer-Encoding: base64\r\n"
+    b"Content-ID: <mySvg>\r\n"
+    b"\r\n"
+    b"PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCI+PC9zdmc+\r\n"
+    b"--SVG--\r\n"
+)
+
 MULTIPART_EVIL_FILENAME = (
     b"From: a@x.test\r\n"
     b"To: b@x.test\r\n"
