@@ -93,6 +93,28 @@ All settings are controlled via environment variables:
 The Docker image additionally sets `MH_HTTP_HOST=0.0.0.0` and
 `MH_SMTP_HOST=0.0.0.0` so both servers bind on all interfaces by default.
 
+### Remote image proxy (optional)
+
+Email HTML often references images on remote hosts. By default mailhedgehog
+lets your **browser** fetch them directly. If the machine viewing the UI cannot
+reach those hosts (but the mailhedgehog server can), enable the server-side
+image proxy: mailhedgehog fetches each remote `<img>` and streams it back
+same-origin, so images render regardless of the browser's network.
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `MH_PROXY_REMOTE_IMAGES` | `false` | Master switch for the image proxy. |
+| `MH_PROXY_TIMEOUT` | `10.0` | Per-image fetch timeout (seconds). |
+| `MH_PROXY_MAX_BYTES` | `10485760` | Per-image size cap (bytes; 10 MB). |
+| `MH_PROXY_MAX_REDIRECTS` | `5` | Max redirect hops followed per image. |
+
+Security: the proxy fetches `http(s)` URLs only and **refuses hosts that
+resolve to loopback / private / link-local / reserved addresses** (including
+cloud metadata `169.254.169.254`), re-checking on every redirect hop. SVG is
+served as `application/octet-stream`. It does not fully defend against an
+attacker who actively rebinds DNS between validation and connect; enable it on
+trusted/internal sinks where that residual risk is acceptable.
+
 ### Licence
 
 Portions Copyright (c) 2014 - 2017, Ian Kent (http://iankent.uk)
