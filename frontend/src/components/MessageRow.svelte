@@ -6,6 +6,7 @@
 
   import type { Summary } from '../lib/types.js';
   import { store } from '../lib/store.svelte.js';
+  import { relativeTime, formatSize } from '../lib/time.js';
 
   // AIDEV-NOTE: ROW_HEIGHT is imported from constants.ts to keep it in sync with MessageList.
   import { ROW_HEIGHT } from './constants.js';
@@ -25,27 +26,6 @@
   );
 
   const isSelected = $derived(store.selectedId === summary.ID);
-
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  function formatRelativeTime(isoString: string): string {
-    const now = Date.now();
-    const then = new Date(isoString).getTime();
-    const diffMs = now - then;
-    const diffSec = Math.floor(diffMs / 1000);
-    if (diffSec < 60) return 'just now';
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHour = Math.floor(diffMin / 60);
-    if (diffHour < 24) return `${diffHour}h ago`;
-    const diffDay = Math.floor(diffHour / 24);
-    if (diffDay < 30) return `${diffDay}d ago`;
-    return new Date(isoString).toLocaleDateString();
-  }
 
   function handleClick() {
     store.select(summary.ID);
@@ -88,7 +68,7 @@
   <!-- Meta column: time + size -->
   <div class="flex-shrink-0 text-right space-y-0.5 ml-2">
     <div class="text-xs text-gray-400 whitespace-nowrap">
-      {formatRelativeTime(summary.Created)}
+      {relativeTime(summary.Created)}
     </div>
     <div class="text-xs text-gray-400 whitespace-nowrap">
       {formatSize(summary.Size)}
