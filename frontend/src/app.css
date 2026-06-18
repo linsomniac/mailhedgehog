@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* AIDEV-NOTE: Tailwind v4 class-based dark mode.
+   The 'dark' variant applies when the .dark class is present on <html> or any ancestor.
+   We toggle this class in App.svelte based on user preference / localStorage. */
+@custom-variant dark (&:where(.dark, .dark *));

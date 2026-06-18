@@ -9,35 +9,86 @@ from pathlib import Path
 from quart import Quart, Response, abort, request, websocket
 
 from mailhedgehog.config import Config
-from mailhedgehog.parser import Message, get_mime_part
+from mailhedgehog.parser import (
+    Message,
+    decode_header_value,
+    get_mime_part,
+    get_mime_part_by_cid,
+)
 from mailhedgehog.smtp import SmtpHandler, create_smtp_server
-from mailhedgehog.storage import MessageStore
+from mailhedgehog.storage import KNOWN_SEARCH_KINDS, MessageStore
+
+# AIDEV-NOTE: hard cap on page size to keep list and search responses bounded.
+# Requests with limit > MAX_PAGE_LIMIT are silently clamped, not rejected.
+MAX_PAGE_LIMIT = 200
+
+
+# AIDEV-NOTE: to_summary produces the slim 7-key projection used by ?summary=1.
+# Full address dicts are kept unchanged (the UI needs Mailbox+Domain for display).
+# To is truncated to 3 entries; ToCount carries the real total so the UI can
+# show "and N more" without fetching the full message.
+def to_summary(message: Message) -> dict[str, object]:
+    """Return a slim 7-key projection of a full message dict.
+
+    Keys: ID, From, To (max 3), ToCount, Subject (RFC-2047 decoded), Created, Size.
+    """
+    headers: dict[str, list[str]] = message.get("Content", {}).get("Headers", {})
+    raw_subject: str = (headers.get("Subject") or [""])[0]
+    subject: str = decode_header_value(raw_subject)
+    to_list: list[object] = message.get("To") or []
+    return {
+        "ID": message["ID"],
+        "From": message["From"],
+        "To": to_list[:3],
+        "ToCount": len(to_list),
+        "Subject": subject,
+        "Created": message["Created"],
+        "Size": message["Content"]["Size"],
+    }
+
 
 _PKG = Path(__file__).parent
 
 
 # AIDEV-NOTE: bounded per-client queues. A slow/dead UI client drops live frames
 # (it reconciles on the next /api/v2/messages refresh) and can never grow memory.
+# Each client is stored in _clients dict as queue -> wants_summary bool.
+# to_summary() is only called lazily when at least one summary client is registered.
 class WebSocketBroadcaster:
     def __init__(self, queue_size: int) -> None:
         self._queue_size = queue_size
-        self._clients: set[asyncio.Queue[str]] = set()
+        self._clients: dict[asyncio.Queue[str], bool] = {}
 
-    def register(self) -> asyncio.Queue[str]:
+    def register(self, summary: bool = False) -> asyncio.Queue[str]:
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self._queue_size)
-        self._clients.add(queue)
+        self._clients[queue] = summary
         return queue
 
     def unregister(self, queue: asyncio.Queue[str]) -> None:
-        self._clients.discard(queue)
+        self._clients.pop(queue, None)
 
     async def broadcast(self, message: Message) -> None:
-        data = json.dumps(message)
-        for queue in list(self._clients):
+        full = json.dumps(message)
+        # AIDEV-NOTE: compute slim JSON lazily — only if at least one summary client
+        # is registered. Avoids calling to_summary() on every broadcast when nobody
+        # has subscribed with ?summary=1 (the common/default case).
+        slim: str | None = None
+        if any(self._clients.values()):
+            slim = json.dumps(to_summary(message))
+        for queue, wants_summary in list(self._clients.items()):
+            data = slim if wants_summary and slim is not None else full
             try:
                 queue.put_nowait(data)
             except asyncio.QueueFull:
                 pass
+
+
+def _is_summary(value: str | None) -> bool:
+    """Return True when the ?summary query-param is truthy.
+
+    Accepted truthy values: "1" or "true" (case-insensitive).
+    """
+    return (value or "").lower() in {"1", "true"}
 
 
 def create_app(config: Config, store: MessageStore) -> Quart:
@@ -48,18 +99,25 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     )
 
     @app.route("/")
-    async def index() -> str:
-        return (_PKG / "templates" / "index.html").read_text()
+    async def index() -> Response:
+        # AIDEV-NOTE: serve the built Svelte SPA bundle; no-cache so browsers always
+        # re-validate the HTML after an upgrade (filenames are stable, not hashed).
+        html = (_PKG / "static" / "app" / "index.html").read_text()
+        return Response(
+            html, mimetype="text/html", headers={"Cache-Control": "no-cache"}
+        )
 
     @app.route("/api/v2/messages")
     async def list_messages() -> dict[str, object]:
-        start = request.args.get("start", 0, type=int)
-        limit = request.args.get("limit", 50, type=int)
+        start = max(request.args.get("start", 0, type=int), 0)
+        limit = min(max(request.args.get("limit", 50, type=int), 0), MAX_PAGE_LIMIT)
         items, total = store.list(start, limit)
+        if _is_summary(request.args.get("summary")):
+            items = [to_summary(m) for m in items]
         return {
             "total": total,
             "count": len(items),
-            "start": max(start, 0),
+            "start": start,
             "items": items,
         }
 
@@ -85,13 +143,20 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     async def search() -> dict[str, object]:
         kind = request.args.get("kind", "containing")
         query = request.args.get("query", "")
-        start = request.args.get("start", 0, type=int)
-        limit = request.args.get("limit", 50, type=int)
-        items, total = store.search(kind, query, start, limit)
+        start = max(request.args.get("start", 0, type=int), 0)
+        limit = min(max(request.args.get("limit", 50, type=int), 0), MAX_PAGE_LIMIT)
+        # AIDEV-NOTE: validate kind BEFORE spawning a thread so bad requests fail fast.
+        if kind not in KNOWN_SEARCH_KINDS:
+            abort(400)
+        # AIDEV-NOTE: body search ("containing") can be CPU-heavy on large stores.
+        # Run the entire scan off the event loop so the ASGI worker stays unblocked.
+        items, total = await asyncio.to_thread(store.search, kind, query, start, limit)
+        if _is_summary(request.args.get("summary")):
+            items = [to_summary(m) for m in items]
         return {
             "total": total,
             "count": len(items),
-            "start": max(start, 0),
+            "start": start,
             "items": items,
         }
 
@@ -103,7 +168,10 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         return Response(
             raw,
             mimetype="message/rfc822",
-            headers={"Content-Disposition": f'attachment; filename="{msgid}.eml"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{msgid}.eml"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.route("/api/v1/messages/<msgid>/mime/part/<int:part>/download")
@@ -126,7 +194,43 @@ def create_app(config: Config, store: MessageStore) -> Quart:
             if safe_name:
                 disposition += f'; filename="{safe_name}"'
         return Response(
-            content, mimetype=content_type, headers={"Content-Disposition": disposition}
+            content,
+            mimetype=content_type,
+            headers={
+                "Content-Disposition": disposition,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    # AIDEV-NOTE: cid-based part lookup walks the full MIME tree (unlike the
+    # index-based route which only addresses top-level parts). Non-image content
+    # types are downgraded to application/octet-stream so that attacker-supplied
+    # text/html or image/svg+xml parts cannot execute same-origin scripts.
+    @app.route("/api/v1/messages/<msgid>/mime/cid/<path:cid>/download")
+    async def download_cid_part(msgid: str, cid: str) -> Response:
+        raw = store.get_raw(msgid)
+        if raw is None:
+            abort(404)
+        result = get_mime_part_by_cid(raw, cid)
+        if result is None:
+            abort(404)
+        content, content_type, _filename = result
+        # Only raster image/* types keep their declared type; image/svg+xml
+        # (script-capable) and all other types are served as application/octet-stream
+        # so a malicious part can't be rendered as active content.
+        content_type_lower = content_type.lower()
+        safe_type = (
+            content_type
+            if (
+                content_type_lower.startswith("image/")
+                and content_type_lower != "image/svg+xml"
+            )
+            else "application/octet-stream"
+        )
+        return Response(
+            content,
+            mimetype=safe_type,
+            headers={"X-Content-Type-Options": "nosniff"},
         )
 
     # AIDEV-NOTE: "release"/outgoing-smtp are intentionally unimplemented (a sink has
@@ -139,6 +243,33 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     async def release(msgid: str) -> tuple[str, int]:
         return "Not Implemented", 501
 
+    # AIDEV-NOTE: after_request is the single place we stamp security headers on
+    # every HTTP response. X-Content-Type-Options: nosniff prevents browsers from
+    # MIME-sniffing a response away from the declared content-type.  The CSP locks
+    # down script/object/base execution and prevents framing by untrusted origins.
+    # The old AngularJS UI has been removed (T7 is complete); the Svelte SPA is now
+    # the sole frontend and is fully compatible with this CSP.
+    _CSP = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'self'"
+    )
+
+    @app.after_request
+    async def _security_headers(response: Response) -> Response:
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+        # AIDEV-NOTE: force revalidation of the SPA bundle on every request so
+        # browsers never serve a stale app.js / app.css after an upgrade.  Asset
+        # filenames are stable (not content-hashed), so Quart's default
+        # max-age=43200 would silently serve old JS.  ETag/Last-Modified are still
+        # set by Quart's static handler, yielding cheap 304s instead of re-downloads.
+        if request.path.startswith("/static/app/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     broadcaster = WebSocketBroadcaster(config.ws_queue_size)
     app.broadcaster = broadcaster  # type: ignore[attr-defined]
     smtp_server: list[asyncio.AbstractServer] = []
@@ -150,7 +281,8 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         # which never runs while the queue is empty -- leaving the browser stuck
         # showing "Disconnected" until the first email arrives.
         await websocket.accept()
-        queue = broadcaster.register()
+        summary = _is_summary(websocket.args.get("summary"))
+        queue = broadcaster.register(summary=summary)
         try:
             while True:
                 await websocket.send(await queue.get())

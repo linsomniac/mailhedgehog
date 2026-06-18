@@ -18,7 +18,10 @@ import tempfile
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-IMAGES = _ROOT / "src" / "mailhedgehog" / "static" / "images"
+# AIDEV-NOTE: source of truth for icons is frontend/public/images/; Vite copies
+# these into static/app/images/ during the build.  Regenerate here, then rebuild
+# the frontend (or copy the PNGs manually) to update the served assets.
+IMAGES = _ROOT / "frontend" / "public" / "images"
 MASTER = IMAGES / "icon.svg"
 TILE_BG = "#FBF5E9"
 

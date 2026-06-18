@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email import message_from_bytes
+from email.header import decode_header as _decode_header
+from email.header import make_header as _make_header
 from email.message import Message as EmailMessage
 from email.utils import parseaddr
 from typing import Any
@@ -23,6 +25,22 @@ def safe_str(value: str | bytes) -> str:
     else:
         raw = value
     return raw.decode("utf-8", "replace")
+
+
+def decode_header_value(raw: str) -> str:
+    """Decode an RFC 2047 encoded-word header value to a plain unicode string.
+
+    Never raises: any failure falls back to safe_str(raw). Result is always
+    safe_str-clean (no lone surrogates, json-serializable).
+    """
+    # AIDEV-NOTE: _decode_header returns a list of (bytes_or_str, charset) pairs.
+    # _make_header reassembles them into a str, handling charset decoding.
+    # We wrap the whole thing in try/except so garbage input never raises.
+    try:
+        decoded = str(_make_header(_decode_header(raw)))
+    except Exception:
+        return safe_str(raw)
+    return safe_str(decoded)
 
 
 def parse_addr(addr: str) -> dict[str, Any]:
@@ -74,7 +92,9 @@ def _now_iso() -> str:
 
 # AIDEV-NOTE: A "part" mirrors the shape of Content {Headers, Body, Size, MIME}.
 # Bodies are left in their raw on-the-wire (transfer-encoded) form on purpose —
-# the frontend (strutil.js) decodes base64/quoted-printable/charset itself.
+# the Svelte frontend decodes base64/quoted-printable/charset itself using native
+# browser APIs (TextDecoder / atob).  strutil.js no longer exists (removed in
+# Task 7 along with the AngularJS UI).
 def _part_dict(part: EmailMessage) -> Message:
     if part.is_multipart():
         return {
@@ -101,6 +121,41 @@ def _mime_tree(msg: EmailMessage) -> Message:
         else []
     )
     return {"Parts": [_part_dict(p) for p in parts]}
+
+
+def get_mime_part_by_cid(raw: bytes, cid: str) -> tuple[bytes, str, str | None] | None:
+    """Walk the full MIME tree and return the first part whose Content-ID matches cid.
+
+    Normalization: strip one leading '<' and trailing '>' if present, then casefold.
+    Applied to both the part's Content-ID header and the requested cid.
+
+    Returns (payload_bytes, content_type, filename) on match, None if no part matches.
+    Multipart container parts are skipped — only leaf parts are inspected.
+    """
+
+    # AIDEV-NOTE: msg.walk() yields every part depth-first, including the root.
+    # We skip multipart/* parts because they have no decodable payload and their
+    # Content-ID (if any) is not meaningful for direct data retrieval.
+    def _normalize(value: str) -> str:
+        v = value.strip()
+        if v.startswith("<") and v.endswith(">"):
+            v = v[1:-1]
+        return v.casefold()
+
+    want = _normalize(cid)
+    msg = message_from_bytes(raw)
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        raw_cid: str | None = part.get("Content-ID")
+        if raw_cid is None:
+            continue
+        if _normalize(raw_cid) == want:
+            payload = part.get_payload(decode=True) or b""
+            if not isinstance(payload, bytes):
+                payload = b""
+            return payload, part.get_content_type(), part.get_filename()
+    return None
 
 
 def get_mime_part(raw: bytes, index: int) -> tuple[bytes, str, str | None] | None:

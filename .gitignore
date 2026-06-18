@@ -6,3 +6,10 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
+
+# Frontend toolchain
+frontend/node_modules/
+frontend/.vite/
+
+# No sourcemaps in build output
+src/mailhedgehog/static/app/*.map

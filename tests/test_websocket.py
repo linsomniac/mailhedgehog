@@ -7,8 +7,17 @@ import socket
 import pytest
 
 from mailhedgehog.config import Config
+from mailhedgehog.parser import parse
 from mailhedgehog.storage import MessageStore
 from mailhedgehog.web import WebSocketBroadcaster, create_app
+from tests.sample_emails import ASCII
+
+# AIDEV-NOTE: Realistic full message used by slim-frame tests. parse() produces
+# the full 7-top-key shape that to_summary() expects (ID, From, To, Content, ...).
+_FULL_MSG = parse(ASCII, "alice@example.com", ["bob@example.com"], None)
+
+# Keys that to_summary always returns (7-key slim projection).
+_SLIM_KEYS = {"ID", "From", "To", "ToCount", "Subject", "Created", "Size"}
 
 
 async def test_broadcaster_is_bounded():
@@ -142,3 +151,104 @@ async def test_server_emits_websocket_ping_when_idle() -> None:
     finally:
         shutdown.set()
         await asyncio.wait_for(server, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Task 4 (B4): opt-in slim ?summary=1 frames
+# ---------------------------------------------------------------------------
+
+
+async def test_broadcaster_slim_client_receives_slim_frame():
+    """A client registered with summary=True gets the 7-key slim projection."""
+    b = WebSocketBroadcaster(queue_size=10)
+    q = b.register(summary=True)
+    await b.broadcast(_FULL_MSG)
+    frame = json.loads(q.get_nowait())
+    assert set(frame.keys()) == _SLIM_KEYS, (
+        f"expected slim keys, got {set(frame.keys())}"
+    )
+
+
+async def test_broadcaster_full_client_receives_full_frame():
+    """A client registered with summary=False (default) gets all message keys."""
+    b = WebSocketBroadcaster(queue_size=10)
+    q = b.register(summary=False)
+    await b.broadcast(_FULL_MSG)
+    frame = json.loads(q.get_nowait())
+    # Full message has keys beyond the slim set (e.g. Content, MIME, Raw).
+    assert "Content" in frame and "Raw" in frame, (
+        "full frame must include Content and Raw"
+    )
+
+
+async def test_broadcaster_default_register_receives_full_frame():
+    """register() with no args still delivers the full frame (backward compat)."""
+    b = WebSocketBroadcaster(queue_size=10)
+    q = b.register()
+    await b.broadcast(_FULL_MSG)
+    frame = json.loads(q.get_nowait())
+    assert "Content" in frame and "Raw" in frame, (
+        "default register() must deliver full frame"
+    )
+
+
+async def test_broadcaster_mixed_clients_each_get_correct_frame():
+    """One slim and one full client receive different frames from same broadcast."""
+    b = WebSocketBroadcaster(queue_size=10)
+    q_slim = b.register(summary=True)
+    q_full = b.register(summary=False)
+    await b.broadcast(_FULL_MSG)
+    slim_frame = json.loads(q_slim.get_nowait())
+    full_frame = json.loads(q_full.get_nowait())
+    assert set(slim_frame.keys()) == _SLIM_KEYS
+    assert "Content" in full_frame and "Raw" in full_frame
+
+
+async def test_broadcaster_slim_bounded_queue_drops_on_full():
+    """Bounded-queue drop semantics preserved for summary clients."""
+    b = WebSocketBroadcaster(queue_size=2)
+    q = b.register(summary=True)
+    for _ in range(5):
+        await b.broadcast(_FULL_MSG)
+    assert q.qsize() == 2  # excess dropped, queue never exceeds capacity
+    b.unregister(q)
+
+
+async def test_broadcaster_lazy_slim_serialization_no_slim_clients():
+    """When no summary clients exist, to_summary is never called.
+
+    This is implicitly verified by broadcasting a message with the minimal shape
+    used in existing tests (no Content key), which would crash to_summary if called.
+    """
+    b = WebSocketBroadcaster(queue_size=10)
+    q = b.register(summary=False)
+    # Broadcast a minimal dict that lacks the keys to_summary expects.
+    # If broadcast() naively calls to_summary() even when no slim clients are
+    # registered it would raise KeyError; the test would fail.
+    await b.broadcast({"ID": "minimal"})
+    frame = json.loads(q.get_nowait())
+    assert frame["ID"] == "minimal"
+
+
+async def test_websocket_summary_param_delivers_slim_frame(app_and_store):
+    """End-to-end: ?summary=1 WS connection receives a slim JSON frame."""
+    app, _ = app_and_store
+    client = app.test_client()
+    async with client.websocket("/api/v2/websocket?summary=1") as ws:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await app.broadcaster.broadcast(_FULL_MSG)
+        frame = json.loads(await asyncio.wait_for(ws.receive(), timeout=2.0))
+    assert set(frame.keys()) == _SLIM_KEYS
+
+
+async def test_websocket_no_summary_param_delivers_full_frame(app_and_store):
+    """End-to-end: WS connection without ?summary receives a full JSON frame."""
+    app, _ = app_and_store
+    client = app.test_client()
+    async with client.websocket("/api/v2/websocket") as ws:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await app.broadcaster.broadcast(_FULL_MSG)
+        frame = json.loads(await asyncio.wait_for(ws.receive(), timeout=2.0))
+    assert "Content" in frame and "Raw" in frame
