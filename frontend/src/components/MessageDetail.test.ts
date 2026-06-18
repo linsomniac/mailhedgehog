@@ -71,7 +71,6 @@ function makeFullMessage(overrides: Partial<FullMessage> = {}): FullMessage {
     },
     MIME: null,
     Created: new Date().toISOString(),
-    Size: 500,
     Raw: {
       From: 'sender@example.com',
       To: ['rcpt@example.com'],
@@ -358,6 +357,70 @@ describe('MessageDetail: MIME parts tab', () => {
     await waitFor(() => {
       const downloads = document.querySelectorAll('[data-testid^="part-download-"]');
       expect(downloads.length).toBeGreaterThan(0);
+    });
+  });
+
+  // I2: nested multipart — download indices must match top-level parts only.
+  // A message with multipart/mixed → [multipart/alternative, attachment] has two
+  // top-level parts (index 0 and 1). The nested sub-parts inside the alternative
+  // must NOT get their own download indices.
+  it('download indices correspond to top-level parts only for nested multipart', async () => {
+    const nestedMsg: FullMessage = makeFullMessage({
+      MIME: {
+        Parts: [
+          // Top-level part 0: multipart/alternative with two sub-parts
+          {
+            Headers: { 'Content-Type': ['multipart/alternative'] },
+            Body: '',
+            Size: 0,
+            MIME: {
+              Parts: [
+                {
+                  Headers: { 'Content-Type': ['text/plain; charset=utf-8'] },
+                  Body: 'plain',
+                  Size: 5,
+                  MIME: null,
+                },
+                {
+                  Headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+                  Body: btoa('<p>html</p>'),
+                  Size: 10,
+                  MIME: null,
+                },
+              ],
+            },
+          },
+          // Top-level part 1: an attachment
+          {
+            Headers: {
+              'Content-Type': ['application/pdf'],
+              'Content-Disposition': ['attachment; filename="doc.pdf"'],
+            },
+            Body: btoa('pdfdata'),
+            Size: 7,
+            MIME: null,
+          },
+        ],
+      },
+    });
+
+    render(MessageDetail, { props: { message: nestedMsg } });
+    await fireEvent.click(screen.getByTestId('tab-parts'));
+
+    await waitFor(() => {
+      // Exactly 2 download links: index 0 and index 1 (top-level only, not the 2 sub-parts)
+      const dl0 = document.querySelector('[data-testid="part-download-0"]') as HTMLAnchorElement | null;
+      const dl1 = document.querySelector('[data-testid="part-download-1"]') as HTMLAnchorElement | null;
+      const dl2 = document.querySelector('[data-testid="part-download-2"]');
+
+      expect(dl0).toBeTruthy();
+      expect(dl1).toBeTruthy();
+      // No index-2 download — nested sub-parts do not get their own download links
+      expect(dl2).toBeNull();
+
+      // Verify the URLs use the correct top-level indices
+      expect(dl0!.getAttribute('href')).toContain('/mime/part/0/download');
+      expect(dl1!.getAttribute('href')).toContain('/mime/part/1/download');
     });
   });
 });

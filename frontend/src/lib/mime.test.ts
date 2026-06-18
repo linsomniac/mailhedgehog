@@ -33,7 +33,6 @@ function makeMessage(overrides: Partial<FullMessage> = {}): FullMessage {
     },
     MIME: null,
     Created: new Date().toISOString(),
-    Size: 100,
     Raw: { From: '', To: [], Helo: '', Data: '' },
     ...overrides,
   };
@@ -352,6 +351,20 @@ describe('buildSrcdoc', () => {
     const result = buildSrcdoc(html, 'msg-xyz', mockCidUrl);
     // Should resolve to a URL, not have cid: in src
     expect(result).not.toContain('cid:');
+  });
+
+  // M9: CSP meta must be injected even when input HTML has no <head> or <html> element.
+  // DOMParser synthesizes a full document (including head) when parsing partial HTML,
+  // so buildSrcdoc should still find a <head> to prepend the CSP meta into.
+  it('injects CSP meta even when input HTML has no <head> or <html>', () => {
+    const html = '<p>hi</p>';
+    const result = buildSrcdoc(html, 'msg1', mockCidUrl);
+    expect(result).toContain('Content-Security-Policy');
+    expect(result).toContain("script-src 'none'");
+    // The output should still be a full document
+    expect(result.startsWith('<!doctype html>')).toBe(true);
+    // The paragraph content should be preserved
+    expect(result).toContain('<p>hi</p>');
   });
 });
 

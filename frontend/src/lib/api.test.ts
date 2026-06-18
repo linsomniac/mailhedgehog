@@ -87,7 +87,7 @@ describe('listMessages', () => {
 
 describe('getMessage', () => {
   it('percent-encodes the id in the path', async () => {
-    const mockFetch = makeFetchMock(200, { ID: 'abc/123', From: {}, To: [], Content: {}, Created: '', Size: 0, Raw: {} });
+    const mockFetch = makeFetchMock(200, { ID: 'abc/123', From: {}, To: [], Content: {}, Created: '', Raw: {} });
     vi.stubGlobal('fetch', mockFetch);
 
     await getMessage('abc/123');

@@ -46,7 +46,6 @@ export interface FullMessage {
   Content: Content;
   MIME: MIMEBody | null;
   Created: string;
-  Size: number;
   Raw: {
     From: string;
     To: string[];

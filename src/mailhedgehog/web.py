@@ -34,7 +34,7 @@ def to_summary(message: Message) -> dict[str, object]:
     """
     headers: dict[str, list[str]] = message.get("Content", {}).get("Headers", {})
     raw_subject: str = (headers.get("Subject") or [""])[0]
-    subject: str = decode_header_value(raw_subject) if raw_subject else ""
+    subject: str = decode_header_value(raw_subject)
     to_list: list[object] = message.get("To") or []
     return {
         "ID": message["ID"],
@@ -247,8 +247,8 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     # every HTTP response. X-Content-Type-Options: nosniff prevents browsers from
     # MIME-sniffing a response away from the declared content-type.  The CSP locks
     # down script/object/base execution and prevents framing by untrusted origins.
-    # The old AngularJS index loads CDN scripts; this CSP will block them in a
-    # browser, which is intentional — the AngularJS UI is being removed in T7.
+    # The old AngularJS UI has been removed (T7 is complete); the Svelte SPA is now
+    # the sole frontend and is fully compatible with this CSP.
     _CSP = (
         "default-src 'self'; "
         "script-src 'self'; "

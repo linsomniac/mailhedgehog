@@ -327,3 +327,26 @@ def test_search_start_beyond_total_returns_empty_with_correct_total():
     items, total = store.search("containing", "findme", 100, 50)
     assert items == []
     assert total == 3
+
+
+def test_search_skips_id_evicted_between_snapshot_and_lookup():
+    """search() must not KeyError when an id is in _order but absent from _entries.
+
+    This simulates the race where a concurrent eviction removes an entry after the
+    _order snapshot is taken but before _entries.get() is called. The implementation
+    uses list(_order) + .get() to make search thread-safe against this interleaving.
+    """
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+    store.add(_msg("present", data="hello"), b"x")
+    store.add(_msg("ghost", data="hello"), b"y")
+
+    # Manually simulate a mid-iteration eviction: "ghost" appears in _order but
+    # has already been removed from _entries (as if evicted concurrently).
+    del store._entries["ghost"]
+    # Leave _order intact to simulate the race (don't bother keeping _total_bytes
+    # accurate — this is a unit test of search's defensive .get() path only).
+
+    # Must not raise, must return only the still-present entry.
+    items, total = store.search("containing", "hello", 0, 10)
+    assert total == 1
+    assert items[0]["ID"] == "present"

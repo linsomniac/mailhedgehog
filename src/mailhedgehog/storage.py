@@ -151,13 +151,18 @@ class MessageStore:
         if kind not in KNOWN_SEARCH_KINDS:
             raise ValueError(f"unknown search kind: {kind!r}")
         needle = _nfc_fold(query)
-        # AIDEV-NOTE: iterate newest-first via reversed(_order) to avoid materialising
-        # a full copy. Scan all entries for an honest total (no early stop).
-        matches = [
-            self._entries[i].message
-            for i in reversed(self._order)
-            if self._matches(self._entries[i], kind, needle)
-        ]
+        # AIDEV-NOTE: search() is called via asyncio.to_thread, so it runs concurrently
+        # with the event loop, which may call add()/delete()/clear() on _entries/_order.
+        # Taking a snapshot with list(_order) is a single GIL-atomic copy, giving us a
+        # consistent view of the id sequence. Using .get() instead of direct dict access
+        # then safely skips any ids evicted between snapshot time and lookup time.
+        # This is what makes search thread-safe against concurrent eviction without a
+        # lock.
+        matches = []
+        for i in reversed(list(self._order)):
+            entry = self._entries.get(i)
+            if entry is not None and self._matches(entry, kind, needle):
+                matches.append(entry.message)
         start = max(start, 0)
         return matches[start : start + limit], len(matches)
 

@@ -2,12 +2,13 @@
   // AIDEV-NOTE: SECURITY-CRITICAL component — renders untrusted email content.
   //
   // Security invariants that MUST NOT be broken:
-  // 1. The ONLY {@html} usage allowed is the iframe srcdoc binding, and that iframe
-  //    MUST have sandbox="" WITHOUT allow-scripts or allow-same-origin.
+  // 1. The ONLY untrusted-HTML injection is the iframe srcdoc attribute binding, and that
+  //    iframe MUST have sandbox="" WITHOUT allow-scripts or allow-same-origin.
+  //    (There is no {@html} directive anywhere in this component.)
   // 2. Plain text, Source, and Headers tabs MUST use Svelte text interpolation ({}) only.
   // 3. buildSrcdoc() handles all HTML sanitization (script removal, cid rewriting, CSP injection).
-  // 4. The srcdoc is built LAZILY (only when the HTML tab is opened) to avoid unnecessary
-  //    DOM parsing of untrusted content.
+  // 4. The srcdoc is built EAGERLY on message load (not lazily on tab open) so the HTML
+  //    preview is ready when the default HTML tab is shown.
   //
   // Tab order: HTML | Plain | Source | Headers | MIME parts
 
@@ -32,9 +33,9 @@
   type Tab = 'html' | 'plain' | 'source' | 'headers' | 'parts';
   let activeTab = $state<Tab>('html');
 
-  // AIDEV-NOTE: srcdoc is built lazily to avoid parsing untrusted HTML until necessary.
-  // Once built, it's cached for the lifetime of this message prop.
-  // Re-computed if message changes (e.g. navigating to a new message).
+  // AIDEV-NOTE: srcdoc is built eagerly on message load (in the $effect below) so the
+  // HTML preview is ready when the default tab is shown. Once built, it's cached for
+  // the lifetime of this message prop and re-computed when message changes.
   let srcdocCache = $state<string | null>(null);
   let srcdocError = $state<string | null>(null);
 
@@ -47,8 +48,8 @@
   // --- Derived values ---
   const msgId = $derived(message.ID);
 
-  // Flatten all MIME parts for the "MIME parts" tab
-  const mimeParts = $derived(flattenParts(message));
+  // Top-level MIME parts for the "MIME parts" tab (download indices match backend)
+  const mimeParts = $derived(topLevelParts(message));
 
   // Header entries for the "Headers" tab
   const headerEntries = $derived(
@@ -62,28 +63,20 @@
 
   // --- Helpers ---
 
-  function flattenParts(msg: FullMessage): Array<{ index: number; contentType: string; size: number }> {
-    const results: Array<{ index: number; contentType: string; size: number }> = [];
-    let index = 0;
-
-    function walk(parts: import('../lib/types.js').MIMEPart[]): void {
-      for (const part of parts) {
-        const ct = part.Headers['Content-Type']?.[0] ?? '(unknown)';
-        results.push({ index, contentType: ct, size: part.Size });
-        index++;
-        if (part.MIME?.Parts) {
-          walk(part.MIME.Parts);
-        }
-      }
-    }
-
-    if (msg.MIME?.Parts) {
-      walk(msg.MIME.Parts);
-    } else if (msg.Content?.MIME?.Parts) {
-      walk(msg.Content.MIME.Parts);
-    }
-
-    return results;
+  // AIDEV-NOTE: Only top-level parts get a downloadable index. The backend
+  // get_mime_part(raw, index) addresses msg.get_payload()[index] — top-level only.
+  // Recursing into nested sub-parts would produce indices that the backend cannot
+  // address, causing wrong-part downloads or 404s.
+  // cid-based image links are unaffected (they use a separate endpoint that walks
+  // the full MIME tree by Content-ID).
+  function topLevelParts(msg: FullMessage): Array<{ index: number; contentType: string; size: number }> {
+    const parts =
+      msg.MIME?.Parts ?? msg.Content?.MIME?.Parts ?? [];
+    return parts.map((part, index) => ({
+      index,
+      contentType: part.Headers['Content-Type']?.[0] ?? '(unknown)',
+      size: part.Size,
+    }));
   }
 
   // --- Tab handlers ---
@@ -91,7 +84,8 @@
   function openTab(tab: Tab): void {
     activeTab = tab;
 
-    // Lazy-build srcdoc when HTML tab is opened
+    // srcdoc is built eagerly in the $effect on message load; no rebuild needed here.
+    // But guard against the rare case where it hasn't been set yet (e.g. error path).
     if (tab === 'html' && srcdocCache === null && srcdocError === null) {
       buildHtmlTab();
     }
@@ -239,8 +233,9 @@
           <!-- AIDEV-NOTE: SECURITY-CRITICAL iframe:
                - sandbox="" with NO allow-scripts, NO allow-same-origin
                - referrerpolicy="no-referrer" prevents Referer header on outbound requests
-               - srcdoc contains sanitized HTML with CSP meta injected by buildSrcdoc()
-               - This is the ONLY {@html} usage permitted in the entire frontend -->
+               - srcdoc is an attribute binding (NOT a {@html} directive) containing
+                 sanitized HTML with CSP meta injected by buildSrcdoc()
+               - This is the ONLY point where untrusted HTML reaches the DOM -->
           <iframe
             sandbox=""
             referrerpolicy="no-referrer"
