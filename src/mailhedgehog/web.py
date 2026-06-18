@@ -99,8 +99,13 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     )
 
     @app.route("/")
-    async def index() -> str:
-        return (_PKG / "templates" / "index.html").read_text()
+    async def index() -> Response:
+        # AIDEV-NOTE: serve the built Vue SPA bundle; no-cache so browsers always
+        # re-validate the HTML after an upgrade (filenames are stable, not hashed).
+        html = (_PKG / "static" / "app" / "index.html").read_text()
+        return Response(
+            html, mimetype="text/html", headers={"Cache-Control": "no-cache"}
+        )
 
     @app.route("/api/v2/messages")
     async def list_messages() -> dict[str, object]:
@@ -256,6 +261,13 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     async def _security_headers(response: Response) -> Response:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Content-Security-Policy", _CSP)
+        # AIDEV-NOTE: force revalidation of the SPA bundle on every request so
+        # browsers never serve a stale app.js / app.css after an upgrade.  Asset
+        # filenames are stable (not content-hashed), so Quart's default
+        # max-age=43200 would silently serve old JS.  ETag/Last-Modified are still
+        # set by Quart's static handler, yielding cheap 304s instead of re-downloads.
+        if request.path.startswith("/static/app/"):
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     broadcaster = WebSocketBroadcaster(config.ws_queue_size)

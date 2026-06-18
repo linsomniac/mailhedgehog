@@ -92,7 +92,9 @@ def _now_iso() -> str:
 
 # AIDEV-NOTE: A "part" mirrors the shape of Content {Headers, Body, Size, MIME}.
 # Bodies are left in their raw on-the-wire (transfer-encoded) form on purpose —
-# the frontend (strutil.js) decodes base64/quoted-printable/charset itself.
+# the Vue frontend decodes base64/quoted-printable/charset itself using native
+# browser APIs (TextDecoder / atob).  strutil.js no longer exists (removed in
+# Task 7 along with the AngularJS UI).
 def _part_dict(part: EmailMessage) -> Message:
     if part.is_multipart():
         return {
