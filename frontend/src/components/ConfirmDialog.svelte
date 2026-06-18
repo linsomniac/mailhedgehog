@@ -32,10 +32,15 @@
   }
 
   function handleConfirm(): void {
+    // AIDEV-NOTE: Call dialog.close() before the callback so the browser tears down
+    // modal state (focus restoration, scroll unlock) even if the parent removes the
+    // element via {#if} immediately after.
+    dialog?.close();
     onConfirm();
   }
 
   function handleCancel(): void {
+    dialog?.close();
     onCancel();
   }
 </script>

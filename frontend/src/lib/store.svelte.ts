@@ -167,6 +167,15 @@ function createStore() {
     loadFirst();
   }
 
+  // AIDEV-NOTE: clearSelect() dismisses any selectError / not-available state WITHOUT
+  // making any network request. Sets selectedId=null and selectError=null.
+  // Use this for the "Go back" button instead of select('') which abuses the error path
+  // and fires a spurious HTTP request.
+  function clearSelect(): void {
+    selectedId = null;
+    selectError = null;
+  }
+
   // AIDEV-NOTE: select() returns the full message. It tries the LRU cache first.
   // On cache miss, fetches from API. On 404, removes the ghost row from the list.
   // Does NOT throw — surfaces errors via the selectError field.
@@ -267,6 +276,7 @@ function createStore() {
     showPending,
     setSearch,
     clearSearch,
+    clearSelect,
     select,
     deleteOne,
     deleteAllMessages,

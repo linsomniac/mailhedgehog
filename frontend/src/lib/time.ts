@@ -3,7 +3,9 @@
 // falling back to a localized absolute date for messages older than 30 days.
 // Uses Intl.NumberFormat for file size formatting (B / KB / MB).
 
-const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+// AIDEV-NOTE: Pinned to 'en-US' for deterministic output across environments/CI.
+// This is a dev tool; consistency over locale-awareness.
+const rtf = new Intl.RelativeTimeFormat('en-US', { numeric: 'auto' });
 
 /**
  * Returns a human-friendly relative time string for an ISO timestamp.
@@ -40,9 +42,9 @@ export function relativeTime(iso: string): string {
 const KB = 1024;
 const MB = 1024 * 1024;
 
-const byteFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-const kbFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const mbFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const byteFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const kbFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const mbFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 /**
  * Returns a human-friendly size string.

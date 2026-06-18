@@ -544,6 +544,59 @@ describe('setSearch() and clearSearch()', () => {
   });
 });
 
+describe('clearSelect()', () => {
+  it('sets selectedId and selectError to null without calling getMessage', async () => {
+    // Arrange: trigger a 404 to get into error state
+    const items = [makeSummary('ghost')];
+    vi.mocked(api.listMessages).mockResolvedValue(makePage(items, 1));
+    await store.loadFirst();
+
+    vi.mocked(api.getMessage).mockRejectedValue(new Error('HTTP 404 Not Found'));
+    await store.select('ghost');
+    // selectError should be set (404 path sets it and nulls selectedId)
+    expect(store.selectError).toBeTruthy();
+
+    // Set selectedId manually to a known value to test clearSelect
+    // (We need it non-null: use a successful select first)
+    const items2 = [makeSummary('real')];
+    vi.mocked(api.listMessages).mockResolvedValue(makePage(items2, 1));
+    store.resetForTest();
+    vi.clearAllMocks();
+
+    vi.mocked(api.listMessages).mockResolvedValue(makePage([makeSummary('real')], 1));
+    await store.loadFirst();
+    vi.mocked(api.getMessage).mockResolvedValue(makeFullMessage('real'));
+    await store.select('real');
+    expect(store.selectedId).toBe('real');
+
+    vi.clearAllMocks();
+    store.clearSelect();
+
+    expect(store.selectedId).toBeNull();
+    expect(store.selectError).toBeNull();
+    // getMessage must NOT have been called — clearSelect does zero HTTP requests
+    expect(api.getMessage).not.toHaveBeenCalled();
+  });
+
+  it('clears selectError state set by a 404 without any fetch', async () => {
+    const items = [makeSummary('ghost2')];
+    vi.mocked(api.listMessages).mockResolvedValue(makePage(items, 1));
+    await store.loadFirst();
+
+    vi.mocked(api.getMessage).mockRejectedValue(new Error('HTTP 404 Not Found'));
+    await store.select('ghost2');
+    expect(store.selectError).toBeTruthy();
+
+    vi.clearAllMocks();
+    store.clearSelect();
+
+    expect(store.selectError).toBeNull();
+    expect(store.selectedId).toBeNull();
+    expect(api.getMessage).not.toHaveBeenCalled();
+    expect(api.listMessages).not.toHaveBeenCalled();
+  });
+});
+
 describe('setWsStatus() and setAtTop()', () => {
   it('setWsStatus updates wsStatus', () => {
     store.setWsStatus('connected');
