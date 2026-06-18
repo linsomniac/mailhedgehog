@@ -87,34 +87,48 @@ async def test_search_unknown_kind_returns_400(app_and_store):
 
 async def test_list_limit_clamped_to_max(app_and_store):
     """limit=10000 in /api/v2/messages must be clamped to MAX_PAGE_LIMIT=200."""
-    from mailhedgehog.web import MAX_PAGE_LIMIT
-
     app, store = app_and_store
-    for i in range(5):
+    # Add >200 messages so clamp actually fires and count == 200 (not just < 200)
+    # Note: store.max_messages defaults to 100, so we only see min(205, 100) = 100
+    # in store, but the API clamps to MAX_PAGE_LIMIT=200. Need custom config.
+    config = Config(smtp_port=0, http_port=0, max_messages=300)
+    store = MessageStore(config.max_messages, config.max_bytes)
+    app = create_app(config, store)
+
+    for i in range(205):
         m = parse(s.ASCII, f"u{i}@example.com", ["b@example.com"], "h")
         store.add(m, s.ASCII)
     client = app.test_client()
     resp = await client.get("/api/v2/messages?limit=10000")
     data = await resp.get_json()
     assert resp.status_code == 200
-    # count must not exceed MAX_PAGE_LIMIT (5 messages < 200, so count == 5 here)
-    assert data["count"] <= MAX_PAGE_LIMIT
-    # confirm the constant is exactly 200
-    assert MAX_PAGE_LIMIT == 200
+    # count must be clamped to 200 (205 messages > 200, so count == 200)
+    assert data["count"] == 200
 
 
 async def test_search_limit_clamped_to_max(app_and_store):
     """limit=10000 in /api/v2/search must be clamped to MAX_PAGE_LIMIT=200."""
-    from mailhedgehog.web import MAX_PAGE_LIMIT
-
     app, store = app_and_store
-    m = parse(s.ASCII, "alice@example.com", ["bob@example.com"], "h")
-    store.add(m, s.ASCII)
+    # Add >200 messages that all match the search query
+    # Note: store.max_messages defaults to 100, so use custom config.
+    config = Config(smtp_port=0, http_port=0, max_messages=300)
+    store = MessageStore(config.max_messages, config.max_bytes)
+    app = create_app(config, store)
+
+    for i in range(205):
+        m = parse(s.ASCII, f"alice-{i}@example.com", ["bob@example.com"], "h")
+        store.add(m, s.ASCII)
     client = app.test_client()
     resp = await client.get("/api/v2/search?kind=from&query=alice&limit=10000")
     data = await resp.get_json()
     assert resp.status_code == 200
-    assert data["count"] <= MAX_PAGE_LIMIT
+    # count must be clamped to 200 (205 messages > 200, so count == 200)
+    assert data["count"] == 200
+    # Also test that negative start is clamped to 0 in response
+    resp = await client.get("/api/v2/search?kind=from&query=alice&start=-10&limit=50")
+    data = await resp.get_json()
+    assert resp.status_code == 200
+    assert data["start"] == 0
 
 
 async def test_search_via_thread_returns_correct_results(app_and_store):

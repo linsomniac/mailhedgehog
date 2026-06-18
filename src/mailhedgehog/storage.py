@@ -114,9 +114,11 @@ class MessageStore:
             self._pop_oldest()
 
     def _pop_oldest(self) -> None:
-        oldest_id = next(iter(self._entries))
+        # AIDEV-NOTE: _order[0] is the oldest message and authoritative oldest id.
+        # Pop from _order first, then use that id for dict + byte accounting to ensure
+        # _entries and _order stay in sync. Do not reintroduce next(iter(_entries)).
+        oldest_id = self._order.pop(0)
         self._total_bytes -= self._entries.pop(oldest_id).size
-        self._order.pop(0)  # _order[0] is always the oldest id
 
     def get(self, msg_id: str) -> Message | None:
         entry = self._entries.get(msg_id)
