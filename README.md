@@ -12,7 +12,17 @@ messages via a web interface.
 
 ### Quickstart
 
-Using Docker:
+Using the published Docker image (no checkout required):
+
+* Run: `docker run -p 1025:1025 -p 8025:8025 -it --name mailhedgehog ghcr.io/linsomniac/mailhedgehog:latest`
+* Open a browser to: http://127.0.0.1:8025/
+* Send an e-mail to SMTP port 1025
+
+Pre-built multi-arch images (`linux/amd64`, `linux/arm64`) are published to the
+GitHub Container Registry on each tagged release.  Use `:latest` for the newest
+release or pin a version, e.g. `ghcr.io/linsomniac/mailhedgehog:0.9.0`.
+
+Building the Docker image locally:
 
 * Clone this repo.
 * Run: `docker build -t mailhedgehog .`
