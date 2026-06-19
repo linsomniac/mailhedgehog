@@ -34,11 +34,14 @@ function makeSummary(overrides: Partial<{
   Subject: string;
   Size: number;
   Created: string;
+  To: { Mailbox: string; Domain: string; Params: string; Relays: null }[];
+  ToCount: number;
 }> = {}) {
   return {
     ID: overrides.ID ?? 'test-id',
     From: { Mailbox: 'sender', Domain: 'example.com', Params: '', Relays: null },
-    To: [{ Mailbox: 'rcpt', Domain: 'example.com', Params: '', Relays: null }],
+    To: overrides.To ?? [{ Mailbox: 'rcpt', Domain: 'example.com', Params: '', Relays: null }],
+    ToCount: overrides.ToCount,
     Subject: overrides.Subject ?? 'Test Subject',
     Created: overrides.Created ?? new Date(Date.now() - 60_000).toISOString(),
     Size: overrides.Size ?? 1024,
@@ -123,5 +126,55 @@ describe('MessageRow', () => {
   it('renders "(no subject)" for empty subject', () => {
     render(MessageRow, { props: { summary: makeSummary({ Subject: '' }) } });
     expect(screen.getByText('(no subject)')).toBeTruthy();
+  });
+});
+
+describe('MessageRow — recipient', () => {
+  it('shows the first recipient with no +N for a single recipient', () => {
+    render(MessageRow, { props: { summary: makeSummary() } });
+    const recip = screen.getByTestId('row-recipient');
+    expect(recip.textContent).toContain('rcpt@example.com');
+    expect(recip.textContent).not.toContain('+');
+  });
+
+  it('shows first recipient + count using ToCount', () => {
+    render(MessageRow, {
+      props: {
+        summary: makeSummary({
+          To: [{ Mailbox: 'bob', Domain: 'x.io', Params: '', Relays: null }],
+          ToCount: 3,
+        }),
+      },
+    });
+    const recip = screen.getByTestId('row-recipient');
+    expect(recip.textContent).toContain('bob@x.io');
+    expect(recip.textContent).toContain('+2');
+  });
+
+  it('falls back to To.length when ToCount is absent', () => {
+    render(MessageRow, {
+      props: {
+        summary: makeSummary({
+          To: [
+            { Mailbox: 'a', Domain: 'x.io', Params: '', Relays: null },
+            { Mailbox: 'b', Domain: 'x.io', Params: '', Relays: null },
+          ],
+        }),
+      },
+    });
+    expect(screen.getByTestId('row-recipient').textContent).toContain('+1');
+  });
+
+  it('renders no recipient element when To is empty', () => {
+    render(MessageRow, { props: { summary: makeSummary({ To: [] }) } });
+    expect(screen.queryByTestId('row-recipient')).toBeNull();
+  });
+});
+
+describe('MessageRow — dark mode', () => {
+  it('the row element carries dark: color variants', () => {
+    const { container } = render(MessageRow, { props: { summary: makeSummary() } });
+    const row = container.querySelector('.message-row') as HTMLElement;
+    expect(row.className).toContain('dark:');
   });
 });
