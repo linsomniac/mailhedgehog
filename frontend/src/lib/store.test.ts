@@ -614,6 +614,26 @@ describe('setWsStatus() and setAtTop()', () => {
   });
 });
 
+describe('setTheme() / isDark', () => {
+  beforeEach(() => {
+    store.resetForTest();
+  });
+  it('defaults to light (isDark false)', () => {
+    expect(store.isDark).toBe(false);
+  });
+  it('setTheme(true) makes isDark true; setTheme(false) reverts', () => {
+    store.setTheme(true);
+    expect(store.isDark).toBe(true);
+    store.setTheme(false);
+    expect(store.isDark).toBe(false);
+  });
+  it('resetForTest restores the light default', () => {
+    store.setTheme(true);
+    store.resetForTest();
+    expect(store.isDark).toBe(false);
+  });
+});
+
 describe('clampListWidth', () => {
   it('never returns below MIN_LIST_WIDTH', () => {
     expect(clampListWidth(100, 2000)).toBe(MIN_LIST_WIDTH);

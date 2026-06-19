@@ -205,6 +205,16 @@ export interface SrcdocOptions {
   cidUrl: (id: string, cid: string) => string;
   proxyImages?: boolean;
   proxyUrl?: (url: string) => string;
+  // AIDEV-NOTE: When set, inject `<meta name="color-scheme" content="<scheme>">` so the
+  // email's UA *default* text/link/canvas colors follow the app theme (dark → light text
+  // + readable links; the user's reported "black text / dark-blue links unreadable in dark
+  // mode" papercut). It only changes UA defaults — any color the email declares itself
+  // still wins. We use a <meta> tag rather than an injected <style> on purpose: the srcdoc
+  // iframe INHERITS the app document's restrictive CSP (default-src 'self', no
+  // style-src 'unsafe-inline'), which blocks injected/author <style> and inline style
+  // attributes — but a <meta name="color-scheme"> is NOT governed by CSP, so it always
+  // applies. The value is from our own enum (never untrusted email data).
+  colorScheme?: 'light' | 'dark';
 }
 
 /**
@@ -248,6 +258,18 @@ export function buildSrcdoc(
   cspMeta.setAttribute('content', EMAIL_CSP);
   const head = doc.head;
   head.insertBefore(cspMeta, head.firstChild);
+
+  // --- Step 6: Inject color-scheme so default colors follow the app theme (opt-in) ---
+  // AIDEV-NOTE: A <meta name="color-scheme"> (NOT a <style>) — it survives the inherited
+  // app CSP that blocks email CSS. A single value forces that scheme regardless of the OS
+  // preference, so it tracks the app's manual theme toggle. color-scheme only sets UA
+  // defaults, so any colors the email declares itself still win.
+  if (opts.colorScheme === 'light' || opts.colorScheme === 'dark') {
+    const schemeMeta = doc.createElement('meta');
+    schemeMeta.setAttribute('name', 'color-scheme');
+    schemeMeta.setAttribute('content', opts.colorScheme);
+    cspMeta.after(schemeMeta);
+  }
 
   return `<!doctype html>${doc.documentElement.outerHTML}`;
 }

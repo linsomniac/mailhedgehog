@@ -289,13 +289,27 @@ def create_app(config: Config, store: MessageStore) -> Quart:
 
     # AIDEV-NOTE: after_request is the single place we stamp security headers on
     # every HTTP response. X-Content-Type-Options: nosniff prevents browsers from
-    # MIME-sniffing a response away from the declared content-type.  The CSP locks
-    # down script/object/base execution and prevents framing by untrusted origins.
-    # The old AngularJS UI has been removed (T7 is complete); the Svelte SPA is now
-    # the sole frontend and is fully compatible with this CSP.
+    # MIME-sniffing a response away from the declared content-type.
+    #
+    # SECURITY-CRITICAL — why this CSP permits inline styles + remote img/font/media:
+    # The HTML-email preview renders in a sandboxed srcdoc iframe (frontend
+    # MessageDetail + mime.buildSrcdoc), and a srcdoc document's effective CSP is the
+    # INTERSECTION of this parent policy and the per-email policy injected into the
+    # srcdoc. So this parent policy must be a SUPERSET of what an email legitimately
+    # needs, or it silently strips ALL email CSS and blocks remote images — making
+    # every HTML email render with unreadable browser defaults. We therefore allow
+    # 'unsafe-inline' styles and remote img/font/media HERE, and rely on the per-email
+    # srcdoc CSP (script-src 'none', form-action 'none', object/frame/base locked) to
+    # keep the untrusted email itself sandboxed. script-src stays 'self' so the app
+    # shell never executes inline or remote scripts; the sandboxed email never executes
+    # scripts at all (its own CSP forbids it AND the iframe has no allow-scripts).
     _CSP = (
         "default-src 'self'; "
         "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https: http:; "
+        "img-src 'self' data: blob: https: http:; "
+        "font-src 'self' data: https: http:; "
+        "media-src 'self' https: http:; "
         "object-src 'none'; "
         "base-uri 'none'; "
         "frame-ancestors 'self'"
