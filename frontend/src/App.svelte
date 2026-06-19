@@ -1,7 +1,7 @@
 <script lang="ts">
   // AIDEV-NOTE: App.svelte is the root Svelte 5 component for mailhedgehog.
   // It mounts the full application shell:
-  //   - Header: logo, SearchBar, actions (theme toggle, delete-all, notifications), StatusDot
+  //   - Header: logo, SearchBar, actions (theme toggle, delete-all), StatusDot
   //   - Body: MessageList (left/top) + MessageDetail (right/bottom) in a split layout
   //   - EmptyState: shown when rows.length === 0 after initial load
   //
@@ -9,10 +9,6 @@
   //   - Default: prefers-color-scheme media query
   //   - Persisted in localStorage under key 'mhg-theme'
   //   - Toggle adds/removes 'dark' on document.documentElement
-  //
-  // Notifications: opt-in via Notification.requestPermission().
-  //   - Throttled: at most 1 per NOTIFICATION_THROTTLE_MS (coalesces bursts).
-  //   - Guarded for browsers without the Notification API.
   //
   // WebSocket: connected in onMount, cleaned up in onDestroy.
 
@@ -55,35 +51,6 @@
   function toggleTheme(): void {
     isDark = !isDark;
     localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
-  }
-
-  // --- Notifications ---
-  const NOTIFICATION_THROTTLE_MS = 3000;
-  let notificationsEnabled = $state(false);
-  let lastNotificationTime = 0;
-
-  async function toggleNotifications(): Promise<void> {
-    if (!('Notification' in window)) return;
-    if (notificationsEnabled) {
-      notificationsEnabled = false;
-      return;
-    }
-    const perm = await Notification.requestPermission();
-    notificationsEnabled = perm === 'granted';
-  }
-
-  // AIDEV-NOTE: showNotification is called per live message when notifications are enabled.
-  // Throttled to at most once per NOTIFICATION_THROTTLE_MS to prevent burst spam.
-  function showNotification(subject: string, from: string): void {
-    if (!notificationsEnabled) return;
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const now = Date.now();
-    if (now - lastNotificationTime < NOTIFICATION_THROTTLE_MS) return;
-    lastNotificationTime = now;
-    new Notification('New mail — mailhedgehog', {
-      body: `From: ${from}\n${subject}`,
-      icon: '/static/app/images/icon.svg',
-    });
   }
 
   // --- Selected message ---
@@ -157,9 +124,6 @@
     connection = ws.connect({
       onMessage(summary) {
         store.applyLive(summary);
-        showNotification(summary.Subject ?? '(no subject)', summary.From
-          ? `${summary.From.Mailbox}@${summary.From.Domain}`
-          : 'Unknown sender');
       },
       onStatus: store.setWsStatus,
       onOpen: store.resync,
@@ -217,35 +181,6 @@
 
     <!-- Actions -->
     <div class="flex items-center gap-2 shrink-0">
-
-      <!-- Notifications toggle -->
-      {#if typeof window !== 'undefined' && 'Notification' in window}
-        <button
-          type="button"
-          class="p-1.5 rounded-md text-gray-500 dark:text-gray-400
-                 hover:bg-gray-100 dark:hover:bg-gray-700
-                 focus:outline-none focus:ring-2 focus:ring-indigo-500
-                 transition-colors"
-          onclick={toggleNotifications}
-          aria-label={notificationsEnabled ? 'Disable notifications' : 'Enable notifications'}
-          title={notificationsEnabled ? 'Disable notifications' : 'Enable notifications'}
-          data-testid="notifications-toggle"
-        >
-          {#if notificationsEnabled}
-            <!-- Bell on (active/indigo): standard bell shape -->
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18z" />
-            </svg>
-          {:else}
-            <!-- Bell off (muted): bell outline with a diagonal slash line through it -->
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18z" />
-              <!-- Slash line from bottom-left to top-right -->
-              <line x1="3" y1="17" x2="17" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-            </svg>
-          {/if}
-        </button>
-      {/if}
 
       <!-- Delete All button -->
       <button
