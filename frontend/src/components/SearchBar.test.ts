@@ -262,3 +262,18 @@ describe('SearchBar — Field selector labels to kinds', () => {
     expect(select.value).toBe('metadata');
   });
 });
+
+describe('SearchBar — single clear control', () => {
+  it('shows exactly one (custom) clear button when a query is present, and it clears', async () => {
+    render(SearchBar);
+    const input = getInput();
+    await fireEvent.input(input, { target: { value: 'hello' } });
+
+    const clears = screen.getAllByTestId('search-clear');
+    expect(clears.length).toBe(1);
+
+    await fireEvent.click(clears[0]);
+    expect(input.value).toBe('');
+    expect(store.clearSearch).toHaveBeenCalled();
+  });
+});

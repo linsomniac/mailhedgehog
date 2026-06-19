@@ -4,3 +4,13 @@
    The 'dark' variant applies when the .dark class is present on <html> or any ancestor.
    We toggle this class in App.svelte based on user preference / localStorage. */
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* AIDEV-NOTE: <input type="search"> draws a native clear (✕) control in WebKit/Blink.
+   SearchBar renders its own custom clear button (data-testid="search-clear"); without
+   this rule the user sees TWO ✕. Hide the native pseudo-elements; keep the custom one. */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
