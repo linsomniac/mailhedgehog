@@ -25,9 +25,10 @@
 
   interface Props {
     message: FullMessage;
+    onClose?: () => void;
   }
 
-  let { message }: Props = $props();
+  let { message, onClose }: Props = $props();
 
   // --- Tab state ---
   type Tab = 'html' | 'plain' | 'source' | 'headers' | 'parts';
@@ -140,38 +141,42 @@
     await store.deleteOne(message.ID);
   }
 
-  // Initialize: build HTML tab content on first render if HTML is the default tab
+  // AIDEV-NOTE: pick the initial tab by content. A plain-only message opens directly on
+  // Plain (instead of the HTML tab's "no HTML part" notice). HTML messages open on HTML.
   $effect(() => {
-    // Reset state when message changes
     srcdocCache = null;
     srcdocError = null;
     plainTokens = [];
     plainError = null;
-    activeTab = 'html';
-    // Build HTML tab immediately since it's the default
-    buildHtmlTab();
+    const hasHtml = !!getHtml(message);
+    activeTab = hasHtml ? 'html' : 'plain';
+    if (hasHtml) {
+      buildHtmlTab();
+    } else {
+      buildPlainTab();
+    }
   });
 </script>
 
 <!-- AIDEV-NOTE: MessageDetail renders the full message content in 5 tabs.
      Security invariants: no {@html} except srcdoc binding; iframe has sandbox=""
      without allow-scripts or allow-same-origin. -->
-<div class="flex flex-col h-full bg-white border-l border-gray-200" data-testid="message-detail">
+<div class="flex flex-col h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700" data-testid="message-detail">
   <!-- Header bar: From, Subject, actions -->
-  <div class="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-start justify-between gap-4">
+  <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex items-start justify-between gap-4">
     <div class="min-w-0">
-      <div class="text-sm font-medium text-gray-900 truncate">
+      <div class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
         {message.From?.Mailbox ?? ''}@{message.From?.Domain ?? ''}
       </div>
-      <div class="text-sm text-gray-700 truncate mt-0.5">
+      <div class="text-sm text-gray-700 dark:text-gray-300 truncate mt-0.5">
         {message.Content?.Headers?.['Subject']?.[0] ?? '(no subject)'}
       </div>
     </div>
-    <div class="flex-shrink-0 flex gap-2">
+    <div class="flex-shrink-0 flex items-center gap-2">
       <a
         href={emlUrl(message.ID)}
         download
-        class="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
+        class="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
         aria-label="Download .eml file"
       >
         Download .eml
@@ -179,16 +184,28 @@
       <button
         type="button"
         onclick={handleDelete}
-        class="text-xs px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
+        class="text-xs px-3 py-1.5 rounded border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
         aria-label="Delete message"
       >
         Delete
+      </button>
+      <button
+        type="button"
+        onclick={() => onClose?.()}
+        class="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+        aria-label="Close message"
+        title="Close (Esc)"
+        data-testid="reader-close"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+        </svg>
       </button>
     </div>
   </div>
 
   <!-- Tab bar -->
-  <div class="flex border-b border-gray-200 bg-white" role="tablist" aria-label="Message view tabs">
+  <div class="flex border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900" role="tablist" aria-label="Message view tabs">
     {#each ([['html', 'HTML'], ['plain', 'Plain'], ['source', 'Source'], ['headers', 'Headers'], ['parts', 'MIME Parts']] as const) as [tab, label]}
       <button
         type="button"
@@ -198,9 +215,12 @@
         class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
         class:border-blue-500={activeTab === tab}
         class:text-blue-600={activeTab === tab}
+        class:dark:text-blue-400={activeTab === tab}
         class:border-transparent={activeTab !== tab}
         class:text-gray-500={activeTab !== tab}
+        class:dark:text-gray-400={activeTab !== tab}
         class:hover:text-gray-700={activeTab !== tab}
+        class:dark:hover:text-gray-200={activeTab !== tab}
         onclick={() => openTab(tab)}
         data-testid="tab-{tab}"
       >
@@ -277,7 +297,7 @@
           <!-- AIDEV-NOTE: Plain text rendered as text interpolation only — NEVER {@html}.
                Link tokens are rendered as <a> elements with safe rel/target attributes.
                text tokens are rendered via Svelte text interpolation (auto-escaped). -->
-          <pre class="text-sm text-gray-800 whitespace-pre-wrap break-words font-sans">{#each plainTokens as token}{#if token.type === 'link'}<a
+          <pre class="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words font-sans">{#each plainTokens as token}{#if token.type === 'link'}<a
                 href={token.href}
                 target="_blank"
                 rel="noopener noreferrer nofollow"
@@ -304,7 +324,7 @@
         <!-- AIDEV-NOTE: Source MUST use Svelte text interpolation, never {@html}.
              A <script> tag in Raw.Data MUST appear as literal text, not be parsed as HTML. -->
         <pre
-          class="text-xs text-gray-700 whitespace-pre-wrap break-words"
+          class="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words"
           data-testid="source-pre"
         >{sourceCapped}</pre>
       </div>
@@ -323,10 +343,10 @@
           <dl class="space-y-2">
             {#each headerEntries as [name, values]}
               <div class="text-sm">
-                <dt class="font-medium text-gray-700">{name}</dt>
+                <dt class="font-medium text-gray-700 dark:text-gray-300">{name}</dt>
                 {#each values as value}
                   <!-- AIDEV-NOTE: Header values rendered as text interpolation — NEVER {@html} -->
-                  <dd class="text-gray-600 ml-2 break-words">{value}</dd>
+                  <dd class="text-gray-600 dark:text-gray-400 ml-2 break-words">{value}</dd>
                 {/each}
               </div>
             {/each}
@@ -347,9 +367,9 @@
         {:else}
           <ul class="space-y-2">
             {#each mimeParts as part}
-              <li class="flex items-center justify-between text-sm border border-gray-200 rounded px-3 py-2">
+              <li class="flex items-center justify-between text-sm border border-gray-200 dark:border-gray-700 rounded px-3 py-2">
                 <div>
-                  <span class="font-mono text-gray-700">{part.contentType}</span>
+                  <span class="font-mono text-gray-700 dark:text-gray-300">{part.contentType}</span>
                   <span class="text-gray-400 ml-2">({part.size} bytes)</span>
                 </div>
                 <a

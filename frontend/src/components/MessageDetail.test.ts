@@ -140,9 +140,8 @@ describe('MessageDetail: tab rendering', () => {
     expect(screen.getByTestId('tab-parts')).toBeTruthy();
   });
 
-  it('shows the HTML panel by default', () => {
-    const msg = makeFullMessage();
-    render(MessageDetail, { props: { message: msg } });
+  it('shows the HTML panel by default when an HTML part exists', () => {
+    render(MessageDetail, { props: { message: makeHtmlMessage() } });
     expect(screen.getByTestId('panel-html')).toBeTruthy();
   });
 
@@ -219,10 +218,18 @@ describe('MessageDetail: HTML tab iframe security', () => {
     });
   });
 
-  it('shows no-html-part message when message has no HTML part', async () => {
-    const msg = makeFullMessage(); // plain only
-    render(MessageDetail, { props: { message: msg } });
+  it('opens on the Plain tab when the message has no HTML part', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } }); // plain only
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-plain')).toBeTruthy();
+      expect(screen.getByText(/Hello, plain text world!/)).toBeTruthy();
+    });
+    expect(screen.queryByTestId('panel-html')).toBeNull();
+  });
 
+  it('still shows the no-html notice if the user manually opens HTML on a plain-only message', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } });
+    await fireEvent.click(screen.getByTestId('tab-html'));
     await waitFor(() => {
       expect(screen.getByText(/No HTML part found/)).toBeTruthy();
     });
@@ -446,5 +453,30 @@ describe('MessageDetail: actions', () => {
 
     await fireEvent.click(screen.getByText('Delete'));
     expect(mockStore.deleteOne).toHaveBeenCalledWith('test-msg-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Close button + dark mode
+// ---------------------------------------------------------------------------
+
+describe('MessageDetail — close + dark', () => {
+  it('renders a close button that calls onClose', async () => {
+    const onClose = vi.fn();
+    render(MessageDetail, { props: { message: makeFullMessage(), onClose } });
+    await fireEvent.click(screen.getByTestId('reader-close'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not crash when onClose is omitted', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } });
+    await fireEvent.click(screen.getByTestId('reader-close')); // no throw
+    expect(screen.getByTestId('message-detail')).toBeTruthy();
+  });
+
+  it('root carries dark: color variants', () => {
+    const { container } = render(MessageDetail, { props: { message: makeFullMessage() } });
+    const root = container.querySelector('[data-testid="message-detail"]') as HTMLElement;
+    expect(root.className).toContain('dark:');
   });
 });
