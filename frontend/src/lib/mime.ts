@@ -205,16 +205,6 @@ export interface SrcdocOptions {
   cidUrl: (id: string, cid: string) => string;
   proxyImages?: boolean;
   proxyUrl?: (url: string) => string;
-  // AIDEV-NOTE: When set, inject `<meta name="color-scheme" content="<scheme>">` so the
-  // email's UA *default* text/link/canvas colors follow the app theme (dark → light text
-  // + readable links; the user's reported "black text / dark-blue links unreadable in dark
-  // mode" papercut). It only changes UA defaults — any color the email declares itself
-  // still wins. We use a <meta> tag rather than an injected <style> on purpose: the srcdoc
-  // iframe INHERITS the app document's restrictive CSP (default-src 'self', no
-  // style-src 'unsafe-inline'), which blocks injected/author <style> and inline style
-  // attributes — but a <meta name="color-scheme"> is NOT governed by CSP, so it always
-  // applies. The value is from our own enum (never untrusted email data).
-  colorScheme?: 'light' | 'dark';
 }
 
 /**
@@ -226,6 +216,9 @@ export interface SrcdocOptions {
  * 3. Rewrite cid: references to same-origin API URLs
  * 4. If opts.proxyImages, rewrite remaining http(s) image refs to the proxy
  * 5. Inject the CSP meta tag as first child of <head>
+ * 6. Inject a <meta name="color-scheme" content="light"> so untrusted email always
+ *    renders on a light canvas (like Gmail/Outlook/Apple Mail), independent of the app
+ *    UI's dark/light theme. Colors the email declares itself still win.
  */
 export function buildSrcdoc(
   html: string,
@@ -259,17 +252,19 @@ export function buildSrcdoc(
   const head = doc.head;
   head.insertBefore(cspMeta, head.firstChild);
 
-  // --- Step 6: Inject color-scheme so default colors follow the app theme (opt-in) ---
-  // AIDEV-NOTE: A <meta name="color-scheme"> (NOT a <style>) — it survives the inherited
-  // app CSP that blocks email CSS. A single value forces that scheme regardless of the OS
-  // preference, so it tracks the app's manual theme toggle. color-scheme only sets UA
-  // defaults, so any colors the email declares itself still win.
-  if (opts.colorScheme === 'light' || opts.colorScheme === 'dark') {
-    const schemeMeta = doc.createElement('meta');
-    schemeMeta.setAttribute('name', 'color-scheme');
-    schemeMeta.setAttribute('content', opts.colorScheme);
-    cspMeta.after(schemeMeta);
-  }
+  // --- Step 6: Force a light canvas so untrusted email is always readable ---
+  // AIDEV-NOTE: We ALWAYS render the HTML email on a light canvas, independent of the app
+  // UI's dark/light theme — exactly like Gmail/Outlook/Apple Mail, which render mail on
+  // white regardless of OS dark mode. Author CSS is written assuming a light client, so a
+  // forced-dark color-scheme breaks partially-styled mail (e.g. an email that sets a light
+  // background but no text color renders white-on-light = unreadable). A
+  // <meta name="color-scheme"> (NOT a <style>) is used so it applies even though the
+  // inherited app CSP blocks email <style>/inline styles; it only sets UA defaults, so any
+  // colors the email declares itself still win. The value is a constant (never email data).
+  const schemeMeta = doc.createElement('meta');
+  schemeMeta.setAttribute('name', 'color-scheme');
+  schemeMeta.setAttribute('content', 'light');
+  cspMeta.after(schemeMeta);
 
   return `<!doctype html>${doc.documentElement.outerHTML}`;
 }

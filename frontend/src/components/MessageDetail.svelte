@@ -97,21 +97,13 @@
     }
   }
 
-  // AIDEV-NOTE: The HTML email renders in a sandboxed iframe that cannot see the app's
-  // manual theme toggle (no allow-same-origin). We pass the current theme as color-scheme
-  // so the email's *default* text/link/canvas colors follow dark/light mode while any
-  // colors the email sets itself still win. See buildSrcdoc()'s colorScheme option.
-  function currentScheme(): 'light' | 'dark' {
-    return store.isDark ? 'dark' : 'light';
-  }
-
-  // AIDEV-NOTE: records the color-scheme the current srcdoc was built for, so the
-  // theme-rebuild effect only rebuilds on an actual theme change (not redundantly on
-  // mount, which would re-create the iframe an extra time). Not reactive by design.
-  let lastBuiltScheme: 'light' | 'dark' | null = null;
-
-  function buildHtmlTab(scheme: 'light' | 'dark' = currentScheme()): void {
-    lastBuiltScheme = scheme;
+  // AIDEV-NOTE: The HTML email renders in a sandboxed iframe (no allow-same-origin) and is
+  // ALWAYS shown on a light canvas, independent of the app's dark/light theme — like
+  // Gmail/Outlook/Apple Mail. buildSrcdoc() injects a color-scheme=light meta; any colors
+  // the email declares itself still win. We deliberately do NOT track the email body to the
+  // UI theme: author CSS assumes a light client, so theming the canvas dark made
+  // partially-styled mail unreadable (e.g. white text on the email's own light background).
+  function buildHtmlTab(): void {
     srcdocError = null;
     try {
       const html = getHtml(message);
@@ -122,7 +114,6 @@
           cidUrl,
           proxyImages: store.proxyImages,
           proxyUrl,
-          colorScheme: scheme,
         });
       }
     } catch (err) {
@@ -159,10 +150,9 @@
 
   // AIDEV-NOTE: pick the initial tab by content. A plain-only message opens directly on
   // Plain (instead of the HTML tab's "no HTML part" notice). HTML messages open on HTML.
-  // Keyed on `message` ONLY: the build calls are wrapped in untrack() so reading the
-  // theme / proxyImages inside them does NOT make this effect re-run on a theme toggle
-  // (which would wrongly reset the active tab). Theme changes are handled by the separate
-  // rebuild effect below.
+  // Keyed on `message` ONLY: the build calls are wrapped in untrack() so reading
+  // store.proxyImages inside them does NOT make this effect re-run (and wrongly reset the
+  // active tab) if the proxy-images config resolves after a message is already open.
   $effect(() => {
     const msg = message; // dependency: re-run only when a different message loads
     untrack(() => {
@@ -187,20 +177,6 @@
         buildHtmlTab();
       } else {
         buildPlainTab();
-      }
-    });
-  });
-
-  // AIDEV-NOTE: When the app theme toggles, rebuild the HTML srcdoc so the iframe's
-  // color-scheme matches. Only rebuilds when an HTML preview is currently on screen, and
-  // it NEVER changes the active tab (so toggling theme while on Source/Plain is a no-op
-  // for the view). `scheme` is read at the top to register the theme dependency and is
-  // passed into the build inside untrack().
-  $effect(() => {
-    const scheme = currentScheme();
-    untrack(() => {
-      if (scheme !== lastBuiltScheme && srcdocError === null && srcdocCache !== null) {
-        buildHtmlTab(scheme);
       }
     });
   });
@@ -308,24 +284,19 @@
                - srcdoc is an attribute binding (NOT a {@html} directive) containing
                  sanitized HTML with CSP meta injected by buildSrcdoc()
                - This is the ONLY point where untrusted HTML reaches the DOM -->
-          <!-- AIDEV-NOTE: {#key srcdocCache} forces a FRESH iframe element whenever the
-               srcdoc changes (new message OR theme toggle). Chromium does NOT re-apply a
-               document's canvas color-scheme when srcdoc is swapped on an EXISTING iframe,
-               so reusing the element left dark-mode emails rendering with light defaults
-               (black text). Recreating the element guarantees the injected
-               `:root{color-scheme:...}` takes effect. color-scheme on the element itself
-               keeps its backdrop matching the theme (no white flash during load). -->
-          {#key srcdocCache}
-            <iframe
-              sandbox=""
-              referrerpolicy="no-referrer"
-              srcdoc={srcdocCache}
-              class="w-full flex-1 border-0"
-              style="min-height: 400px; max-height: 100%; color-scheme: {store.isDark ? 'dark' : 'light'};"
-              title="Email HTML content"
-              data-testid="html-iframe"
-            ></iframe>
-          {/key}
+          <!-- AIDEV-NOTE: color-scheme:light keeps the iframe's own backdrop/scrollbars
+               light to match the always-light email canvas (buildSrcdoc injects a
+               color-scheme=light meta). Untrusted email is rendered light regardless of the
+               app's dark/light theme, like real mail clients. -->
+          <iframe
+            sandbox=""
+            referrerpolicy="no-referrer"
+            srcdoc={srcdocCache}
+            class="w-full flex-1 border-0"
+            style="min-height: 400px; max-height: 100%; color-scheme: light;"
+            title="Email HTML content"
+            data-testid="html-iframe"
+          ></iframe>
         {:else}
           <div class="p-4 text-sm text-gray-400">Loading HTML preview...</div>
         {/if}

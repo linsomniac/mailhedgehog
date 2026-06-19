@@ -40,8 +40,6 @@ const { mockStore } = vi.hoisted(() => {
     selectError: null as string | null,
     wsStatus: 'connected' as 'connected' | 'reconnecting' | 'offline',
     proxyImages: false,
-    isDark: false,
-    setTheme: vi.fn(),
     showPending: vi.fn().mockResolvedValue(undefined),
     setAtTop: vi.fn(),
     loadMore: vi.fn().mockResolvedValue(undefined),
@@ -220,26 +218,10 @@ describe('MessageDetail: HTML tab iframe security', () => {
     });
   });
 
-  it('builds the HTML iframe with color-scheme:dark when the app theme is dark', async () => {
-    mockStore.isDark = true;
-    try {
-      render(MessageDetail, { props: { message: makeHtmlMessage() } });
-      await waitFor(() => {
-        const iframe = document.querySelector(
-          'iframe[data-testid="html-iframe"]',
-        ) as HTMLIFrameElement | null;
-        expect(iframe).toBeTruthy();
-        expect(iframe!.getAttribute('srcdoc') ?? '').toContain(
-          '<meta name="color-scheme" content="dark">',
-        );
-      });
-    } finally {
-      mockStore.isDark = false;
-    }
-  });
-
-  it('builds the HTML iframe with color-scheme:light when the app theme is light', async () => {
-    mockStore.isDark = false;
+  // AIDEV-NOTE: untrusted email always renders on a light canvas (like Gmail/Outlook),
+  // independent of the app's dark/light theme. The iframe element itself also pins
+  // color-scheme:light so its backdrop/scrollbars match.
+  it('always builds the HTML iframe with color-scheme:light', async () => {
     render(MessageDetail, { props: { message: makeHtmlMessage() } });
     await waitFor(() => {
       const iframe = document.querySelector(
@@ -249,6 +231,7 @@ describe('MessageDetail: HTML tab iframe security', () => {
       expect(iframe!.getAttribute('srcdoc') ?? '').toContain(
         '<meta name="color-scheme" content="light">',
       );
+      expect(iframe!.getAttribute('style') ?? '').toContain('color-scheme: light');
     });
   });
 

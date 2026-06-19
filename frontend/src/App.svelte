@@ -50,9 +50,6 @@
     } else {
       document.documentElement.classList.remove('dark');
     }
-    // AIDEV-NOTE: publish the applied theme to the store so MessageDetail can adapt the
-    // HTML-email iframe's color-scheme (and rebuild the srcdoc when the user toggles).
-    store.setTheme(isDark);
   });
 
   function toggleTheme(): void {

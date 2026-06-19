@@ -439,45 +439,47 @@ describe('buildSrcdoc', () => {
     expect(result).not.toContain('/api/v2/proxy');
   });
 
-  // --- color-scheme (dark mode adaptation) ---
-  // AIDEV-NOTE: When colorScheme is provided, buildSrcdoc injects a
-  // `<meta name="color-scheme" content="<scheme>">` so the email's UA *default*
-  // text/link colors adapt to the app theme. A <meta> (not a <style>) is used because
-  // the srcdoc inherits the app's restrictive CSP, which blocks email CSS but not <meta>.
-  // It only sets defaults — any color the email declares itself still wins.
+  // --- color-scheme: always light (untrusted email renders on a light canvas) ---
+  // AIDEV-NOTE: buildSrcdoc ALWAYS injects `<meta name="color-scheme" content="light">`,
+  // independent of any option, so email renders like Gmail/Outlook/Apple Mail (a light
+  // canvas regardless of the app's dark mode). A <meta> (not a <style>) is used because the
+  // srcdoc inherits the app's CSP, which blocks email CSS but not <meta>. It only sets UA
+  // defaults — any color the email declares itself still wins.
 
-  it('injects a color-scheme meta of "dark" when colorScheme is "dark"', () => {
-    const html = '<html><body><p>Hi</p></body></html>';
-    const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, colorScheme: 'dark' });
-    expect(result).toContain('name="color-scheme"');
-    expect(result).toContain('content="dark"');
-  });
-
-  it('injects a color-scheme meta of "light" when colorScheme is "light"', () => {
-    const html = '<html><body><p>Hi</p></body></html>';
-    const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, colorScheme: 'light' });
-    expect(result).toContain('name="color-scheme"');
-    expect(result).toContain('content="light"');
-  });
-
-  it('does NOT inject color-scheme when the option is omitted', () => {
+  it('always injects a color-scheme=light meta', () => {
     const html = '<html><body><p>Hi</p></body></html>';
     const result = buildSrcdoc(html, 'm', cidOpts);
-    expect(result).not.toContain('color-scheme');
+    expect(result).toContain('<meta name="color-scheme" content="light">');
+  });
+
+  it('renders light even when proxying images', () => {
+    const html = '<html><body><p>Hi</p></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('<meta name="color-scheme" content="light">');
+  });
+
+  it('never forces a dark color-scheme', () => {
+    const html = '<html><body><p>Hi</p></body></html>';
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).not.toContain('content="dark"');
   });
 
   it('uses a <meta> tag, not a <style> rule (survives the inherited CSP)', () => {
     const html = '<html><body><p>Hi</p></body></html>';
-    const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, colorScheme: 'dark' });
-    expect(result).toContain('<meta name="color-scheme" content="dark">');
-    expect(result).not.toContain('color-scheme:dark'); // not injected as CSS
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).toContain('<meta name="color-scheme" content="light">');
+    expect(result).not.toContain('color-scheme:light'); // not injected as CSS
   });
 
   it('preserves author-declared colors (overrides are honored)', () => {
     const html =
       '<html><head><style>a{color:#0a0}</style></head>' +
       '<body><p style="color:#c00">Hi</p></body></html>';
-    const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, colorScheme: 'dark' });
+    const result = buildSrcdoc(html, 'm', cidOpts);
     // The email's own colors are never stripped — color-scheme only sets defaults.
     expect(result).toContain('a{color:#0a0}');
     expect(result).toContain('color:#c00');
