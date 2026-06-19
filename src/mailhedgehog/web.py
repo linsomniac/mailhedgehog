@@ -291,25 +291,33 @@ def create_app(config: Config, store: MessageStore) -> Quart:
     # every HTTP response. X-Content-Type-Options: nosniff prevents browsers from
     # MIME-sniffing a response away from the declared content-type.
     #
-    # SECURITY-CRITICAL — why this CSP permits inline styles + remote img/font/media:
-    # The HTML-email preview renders in a sandboxed srcdoc iframe (frontend
-    # MessageDetail + mime.buildSrcdoc), and a srcdoc document's effective CSP is the
+    # SECURITY-CRITICAL — the app CSP is INHERITED by the sandboxed HTML-email srcdoc
+    # iframe (frontend MessageDetail + mime.buildSrcdoc), whose effective policy is the
     # INTERSECTION of this parent policy and the per-email policy injected into the
-    # srcdoc. So this parent policy must be a SUPERSET of what an email legitimately
-    # needs, or it silently strips ALL email CSS and blocks remote images — making
-    # every HTML email render with unreadable browser defaults. We therefore allow
-    # 'unsafe-inline' styles and remote img/font/media HERE, and rely on the per-email
-    # srcdoc CSP (script-src 'none', form-action 'none', object/frame/base locked) to
-    # keep the untrusted email itself sandboxed. script-src stays 'self' so the app
-    # shell never executes inline or remote scripts; the sandboxed email never executes
-    # scripts at all (its own CSP forbids it AND the iframe has no allow-scripts).
+    # srcdoc. So THIS policy gates what an email may load:
+    #   * Default (MH_PROXY_REMOTE_IMAGES off): remote content loads directly by
+    #     design, so we permit 'unsafe-inline' styles + remote img/font/media here.
+    #     Otherwise the intersection would strip ALL email CSS and block remote
+    #     images, rendering every HTML email with unreadable browser defaults.
+    #   * Proxy mode (MH_PROXY_REMOTE_IMAGES on): the frontend rewrites attribute-based
+    #     images to the same-origin /api/v2/proxy endpoint, and the whole point is that
+    #     the operator's browser NEVER fetches remote hosts directly. We therefore drop
+    #     remote (https:/http:) from img/font/media/style HERE so proxied images still
+    #     load (via 'self') while CSS-sourced url() images and remote <link> stylesheets
+    #     — which the frontend does NOT rewrite — are BLOCKED instead of leaking around
+    #     the proxy. (Without this, enabling email CSS reopens a remote-image bypass.)
+    # In BOTH modes script-src stays 'self' (the app shell never runs inline/remote
+    # scripts) and the untrusted email never runs scripts at all (its own srcdoc CSP
+    # forbids it AND the iframe has no allow-scripts/allow-same-origin); object-src,
+    # base-uri and frame-ancestors stay locked.
+    _remote = "" if config.proxy_remote_images else " https: http:"
     _CSP = (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline' https: http:; "
-        "img-src 'self' data: blob: https: http:; "
-        "font-src 'self' data: https: http:; "
-        "media-src 'self' https: http:; "
+        f"style-src 'self' 'unsafe-inline'{_remote}; "
+        f"img-src 'self' data: blob:{_remote}; "
+        f"font-src 'self' data:{_remote}; "
+        f"media-src 'self'{_remote}; "
         "object-src 'none'; "
         "base-uri 'none'; "
         "frame-ancestors 'self'"
