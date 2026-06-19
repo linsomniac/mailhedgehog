@@ -223,7 +223,10 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         raw = store.get_raw(msgid)
         if raw is None:
             abort(404)
-        result = get_mime_part(raw, part)
+        # AIDEV-NOTE: get_mime_part reparses (message_from_bytes) and decodes the
+        # payload, which is CPU-bound; offload it so a large message can't stall the
+        # event loop (mirrors the search/proxy routes' asyncio.to_thread usage).
+        result = await asyncio.to_thread(get_mime_part, raw, part)
         if result is None:
             abort(404)
         content, content_type, filename = result
@@ -255,7 +258,9 @@ def create_app(config: Config, store: MessageStore) -> Quart:
         raw = store.get_raw(msgid)
         if raw is None:
             abort(404)
-        result = get_mime_part_by_cid(raw, cid)
+        # AIDEV-NOTE: offloaded for the same reason as the index-part route — the cid
+        # lookup walks the full MIME tree and decodes a payload (CPU-bound).
+        result = await asyncio.to_thread(get_mime_part_by_cid, raw, cid)
         if result is None:
             abort(404)
         content, content_type, _filename = result

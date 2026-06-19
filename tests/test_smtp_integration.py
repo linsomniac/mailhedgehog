@@ -1,11 +1,24 @@
 import asyncio
+import threading
 
 import aiosmtplib
 
 from mailhedgehog import smtp as smtp_module
+from mailhedgehog.parser import parse as _real_parse
 from mailhedgehog.smtp import SmtpHandler, create_smtp_server
 from mailhedgehog.storage import MessageStore
 from tests import sample_emails as s
+
+
+class _Envelope:
+    def __init__(self, content: bytes, mail_from: str, rcpt_tos: list[str]) -> None:
+        self.content = content
+        self.mail_from = mail_from
+        self.rcpt_tos = rcpt_tos
+
+
+class _Session:
+    host_name = "h"
 
 
 async def _serve(handler):
@@ -59,6 +72,32 @@ async def test_nonutf8_multipart_message_accepted():
     finally:
         server.close()
         await server.wait_closed()
+
+
+async def test_handle_data_parses_off_the_event_loop_thread(monkeypatch):
+    # AIDEV-NOTE: parse() is CPU-bound and the SMTP server shares the HTTP event
+    # loop, so handle_DATA must offload it via asyncio.to_thread. Verify parse runs on
+    # a worker thread (different ident) rather than blocking the event-loop thread.
+    store = MessageStore(max_messages=10, max_bytes=1_000_000)
+
+    async def on_message(_m):
+        return None
+
+    main_tid = threading.get_ident()
+    captured: dict[str, int] = {}
+
+    def spy(*args, **kwargs):
+        captured["tid"] = threading.get_ident()
+        return _real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(smtp_module, "parse", spy)
+    handler = SmtpHandler(store, on_message)
+    envelope = _Envelope(s.ASCII, "a@x.test", ["b@x.test"])
+    result = await handler.handle_DATA(None, _Session(), envelope)
+
+    assert result.startswith("250")
+    assert len(store) == 1
+    assert captured["tid"] != main_tid
 
 
 async def test_parser_failure_stores_placeholder_and_returns_250(monkeypatch):
