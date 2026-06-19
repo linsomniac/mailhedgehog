@@ -68,6 +68,8 @@ beforeEach(() => {
 });
 
 import App from './App.svelte';
+import { store } from './lib/store.svelte.js';
+import * as ws from './lib/ws.js';
 
 describe('App', () => {
   it('renders the mailhedgehog logo/heading', () => {
@@ -101,5 +103,17 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByTestId('empty-state')).toBeTruthy();
     });
+  });
+
+  // AIDEV-NOTE: F3 — a transient initial list-fetch failure must NOT abort WebSocket
+  // startup, or the app silently never receives live mail until a manual reload.
+  it('still starts the WebSocket when the initial list fetch fails', async () => {
+    vi.mocked(ws.connect).mockClear();
+    vi.mocked(store.loadFirst).mockRejectedValueOnce(new Error('HTTP 503'));
+    render(App);
+    await waitFor(() => {
+      expect(ws.connect).toHaveBeenCalled();
+    });
+    vi.mocked(store.loadFirst).mockResolvedValue(undefined); // restore for later tests
   });
 });

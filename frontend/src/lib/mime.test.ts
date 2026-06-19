@@ -114,6 +114,28 @@ describe('decodePart: base64', () => {
       expect(e.maxBytes).toBe(50);
     }
   });
+
+  // AIDEV-NOTE: F5 — the malformed-base64 fallback must still honor the size cap. The
+  // pre-decode estimate is on the whitespace-stripped length, so a body that fails atob()
+  // could otherwise return a raw fallback far larger than maxBytes.
+  it('throws PartTooLargeError when a malformed base64 body exceeds maxBytes', () => {
+    // estimate (stripped*0.75 ≈ 4MB) passes the cap, atob() throws on '!', and the raw
+    // fallback body (>4MB chars) must be rejected rather than returned.
+    const body = 'A'.repeat(5_333_332) + '!';
+    expect(() => decodePart(body, 'base64', 'utf-8', 4_000_000)).toThrow(PartTooLargeError);
+  });
+
+  it('throws PartTooLargeError for whitespace-padded malformed base64 over the cap', () => {
+    // stripped length is tiny (estimate trivially passes), but the raw body is huge.
+    const body = '!!!' + ' '.repeat(5_000_000);
+    expect(() => decodePart(body, 'base64', 'utf-8', 4_000_000)).toThrow(PartTooLargeError);
+  });
+
+  it('still returns the raw fallback for a SMALL malformed base64 body', () => {
+    const result = decodePart('!!!not-base64!!!', 'base64', 'utf-8', 4_000_000);
+    expect(result).toContain('[base64 decode error');
+    expect(result).toContain('!!!not-base64!!!');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -437,6 +459,82 @@ describe('buildSrcdoc', () => {
     const result = buildSrcdoc(html, 'm', { cidUrl: mockCidUrl, proxyImages: false });
     expect(result).toContain('https://h.example/a.png');
     expect(result).not.toContain('/api/v2/proxy');
+  });
+
+  // --- srcset with data: URLs (F6) ---
+  // AIDEV-NOTE: data: URLs contain commas, so the srcset handler must not split on ','.
+  // The cid path runs on EVERY preview (not gated behind proxy), so these protect the
+  // common case.
+  it('preserves a data: URL srcset candidate with a descriptor (no proxy)', () => {
+    const html =
+      '<html><body><img srcset="data:image/png;base64,iVBORw0KGgoAAAANS= 1x"></body></html>';
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).toContain('data:image/png;base64,iVBORw0KGgoAAAANS= 1x');
+  });
+
+  it('preserves a single data: URL srcset candidate with no descriptor', () => {
+    const html =
+      '<html><body><img srcset="data:image/png;base64,iVBORw0KGgoAAAANS="></body></html>';
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).toContain('data:image/png;base64,iVBORw0KGgoAAAANS=');
+  });
+
+  it('rewrites a remote srcset candidate while keeping a data: candidate intact (proxy on)', () => {
+    const html =
+      '<html><body><img srcset="https://h.example/a.png 1x, data:image/png;base64,ABCD 2x"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fh.example%2Fa.png');
+    expect(result).toContain('data:image/png;base64,ABCD 2x');
+  });
+
+  // AIDEV-NOTE: a comma inside a (...) descriptor is NOT a candidate separator (WHATWG).
+  // If the tokenizer split on it, the next candidate's URL would be mis-tokenized and
+  // escape rewriting — a remote URL emitted un-proxied (privacy leak) or a cid left broken.
+  it('proxies a remote candidate that follows a parenthesized descriptor (no leak)', () => {
+    const html =
+      '<html><body><img srcset="https://cdn.example/a.jpg 1x(x,y), https://evil.example/track.gif 2x"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fevil.example%2Ftrack.gif');
+    // The remote URL must NOT survive un-proxied (would let the browser fetch it directly).
+    expect(result).not.toContain('https://evil.example/track.gif 2x');
+  });
+
+  it('rewrites a cid candidate that follows a parenthesized descriptor', () => {
+    const html = '<html><body><img srcset="cid:logo@x 1x(a,b), cid:hero@x 2x"></body></html>';
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).toContain('/api/v1/messages/m/mime/cid/' + encodeURIComponent('hero@x'));
+    expect(result).not.toContain('cid:hero@x');
+  });
+
+  // AIDEV-NOTE: the browser leaves "in parens" on the FIRST ')', so a NESTED/multiple-paren
+  // descriptor like "1x(a(b)c" makes the following comma a real separator and the next
+  // candidate IS loaded. A depth counter would diverge here and re-open the leak; the
+  // boolean in-parens state must match the browser so the next URL is still rewritten.
+  it('proxies a remote candidate after a NESTED-paren descriptor (no leak)', () => {
+    const html =
+      '<html><body><img srcset="https://cdn.example/a.jpg 1x(a(b)c, https://evil.example/track.gif 2x"></body></html>';
+    const result = buildSrcdoc(html, 'm', {
+      cidUrl: mockCidUrl,
+      proxyImages: true,
+      proxyUrl: mockProxyUrl,
+    });
+    expect(result).toContain('/api/v2/proxy?url=https%3A%2F%2Fevil.example%2Ftrack.gif');
+    expect(result).not.toContain('https://evil.example/track.gif 2x');
+  });
+
+  it('rewrites a cid candidate after a NESTED-paren descriptor', () => {
+    const html = '<html><body><img srcset="cid:logo@x 1x(a(b)c, cid:hero@x 2x"></body></html>';
+    const result = buildSrcdoc(html, 'm', cidOpts);
+    expect(result).toContain('/api/v1/messages/m/mime/cid/' + encodeURIComponent('hero@x'));
+    expect(result).not.toContain('cid:hero@x');
   });
 
   // --- color-scheme: always light (untrusted email renders on a light canvas) ---

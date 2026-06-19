@@ -143,7 +143,15 @@
   onMount(async () => {
     store.loadListWidth();
     await store.loadConfig();
-    await store.loadFirst();
+    // AIDEV-NOTE: a transient initial list fetch failure must NOT abort WebSocket setup.
+    // loadFirst() rethrows on fetch/HTTP/JSON errors; if we let it propagate, ws.connect()
+    // below never runs and the app silently never receives live mail until a manual reload.
+    // Swallow it here — the list self-heals via the WS onOpen resync once it connects.
+    try {
+      await store.loadFirst();
+    } catch {
+      /* surfaced via wsStatus / empty state; WS startup must still proceed */
+    }
     initialLoadDone = true;
 
     connection = ws.connect({

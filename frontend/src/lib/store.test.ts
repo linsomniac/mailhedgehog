@@ -7,6 +7,7 @@
 // the browser resolve condition so Svelte 5 client-side runes are active.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Page, Summary } from './types.js';
 import { clampListWidth, MIN_LIST_WIDTH } from './store.svelte.js';
 
 // AIDEV-NOTE: We must mock the api module BEFORE importing the store,
@@ -20,7 +21,7 @@ vi.mock('./api.js', () => ({
 }));
 
 import * as api from './api.js';
-import { PAGE } from './store.svelte.js';
+import { PAGE, MAX_ROWS } from './store.svelte.js';
 
 // AIDEV-NOTE: We re-import the store module fresh for each test using a dynamic import
 // workaround. Because the store is a module-level singleton, we need to reset its
@@ -655,5 +656,125 @@ describe('store.listWidth', () => {
     store.setListWidth(500);
     store.resetForTest();
     expect(store.listWidth).toBe(clampListWidth(NaN, window.innerWidth));
+  });
+});
+
+describe('window bounds (F4)', () => {
+  it('caps rows and seen at MAX_ROWS when live messages arrive at the top', async () => {
+    // Seed a full window in one assignment (looping applyLive MAX_ROWS times would be
+    // O(n^2) through the Svelte proxy), then prepend a few live arrivals past the cap.
+    const seeded = Array.from({ length: MAX_ROWS }, (_, i) => makeSummary(`seed-${i}`));
+    vi.mocked(api.listMessages).mockResolvedValueOnce(makePage(seeded, MAX_ROWS));
+    await store.loadFirst();
+    expect(store.rows.length).toBe(MAX_ROWS);
+
+    store.setAtTop(true);
+    store.applyLive(makeSummary('live-1'));
+    store.applyLive(makeSummary('live-2'));
+    store.applyLive(makeSummary('live-3'));
+
+    // The window stays capped; newest is at the front; the oldest tail rows were dropped.
+    expect(store.rows.length).toBe(MAX_ROWS);
+    expect(store.seen.size).toBe(MAX_ROWS);
+    expect(store.rows[0].ID).toBe('live-3');
+    expect(store.seen.has('seed-4999')).toBe(false); // oldest dropped from the tail
+    expect(store.seen.has('seed-0')).toBe(true); // still within the window
+  });
+
+  it('loadMore does not evict loaded rows on a shrunk total; resync reconciles', async () => {
+    vi.mocked(api.listMessages).mockResolvedValueOnce(
+      makePage([makeSummary('a'), makeSummary('b'), makeSummary('c')], 10),
+    );
+    await store.loadFirst();
+    expect(store.rows.length).toBe(3);
+
+    // Server shrank (FIFO eviction): next page empty, total=2. loadMore must NOT tail-trim
+    // (a concurrent live prepend could otherwise be the victim) — it only updates total.
+    vi.mocked(api.listMessages).mockResolvedValueOnce(makePage([], 2));
+    await store.loadMore();
+    expect(store.total).toBe(2);
+    expect(store.rows.length).toBe(3); // retained; reconciliation deferred to resync
+
+    // resync does the wholesale first-page replace and reconciles the window.
+    vi.mocked(api.listMessages).mockResolvedValueOnce(
+      makePage([makeSummary('a'), makeSummary('b')], 2),
+    );
+    await store.resync();
+    expect(store.rows.length).toBe(2);
+    expect(store.total).toBe(2);
+  });
+});
+
+describe('mutation invalidates in-flight loads (F2 follow-up)', () => {
+  it('deleteOne during an in-flight loadMore does not resurrect the deleted row', async () => {
+    vi.mocked(api.listMessages).mockResolvedValueOnce(
+      makePage([makeSummary('a'), makeSummary('b')], 10),
+    );
+    await store.loadFirst();
+
+    // loadMore's next page (still containing 'a') stays pending while we delete 'a'.
+    let resolveMore!: (p: Page<Summary>) => void;
+    const morePromise = new Promise<Page<Summary>>((r) => {
+      resolveMore = r;
+    });
+    vi.mocked(api.listMessages).mockReturnValueOnce(morePromise);
+    vi.mocked(api.deleteMessage).mockResolvedValue(undefined);
+
+    const more = store.loadMore(); // reqSeq captured
+    await store.deleteOne('a'); // bumps reqSeq, removes 'a'
+    expect(store.rows.find((r) => r.ID === 'a')).toBeUndefined();
+
+    // The stale page comes back still containing 'a' — it must NOT be re-added.
+    resolveMore(makePage([makeSummary('a'), makeSummary('z')], 10));
+    await more;
+    expect(store.rows.find((r) => r.ID === 'a')).toBeUndefined();
+  });
+});
+
+describe('request-sequence guard (F2)', () => {
+  it('a stale loadFirst does not overwrite a newer loadFirst', async () => {
+    // The first request resolves LATE; the second resolves first with the newer data.
+    let resolveOld!: (p: Page<Summary>) => void;
+    const oldPromise = new Promise<Page<Summary>>((r) => {
+      resolveOld = r;
+    });
+    vi.mocked(api.listMessages)
+      .mockReturnValueOnce(oldPromise)
+      .mockResolvedValueOnce(makePage([makeSummary('new')], 1));
+
+    const p1 = store.loadFirst(); // reqSeq=1, awaits the pending old promise
+    const p2 = store.loadFirst(); // reqSeq=2, resolves immediately with 'new'
+    await p2;
+    expect(store.rows.map((r) => r.ID)).toEqual(['new']);
+
+    resolveOld(makePage([makeSummary('old')], 99));
+    await p1;
+    // The stale response must NOT clobber the newer state.
+    expect(store.rows.map((r) => r.ID)).toEqual(['new']);
+    expect(store.total).toBe(1);
+  });
+
+  it('deleteAll invalidates an in-flight loadMore', async () => {
+    vi.mocked(api.listMessages).mockResolvedValueOnce(
+      makePage([makeSummary('a'), makeSummary('b')], 10),
+    );
+    await store.loadFirst();
+
+    let resolveMore!: (p: Page<Summary>) => void;
+    const morePromise = new Promise<Page<Summary>>((r) => {
+      resolveMore = r;
+    });
+    vi.mocked(api.listMessages).mockReturnValueOnce(morePromise);
+    vi.mocked(api.deleteAll).mockResolvedValue(undefined);
+
+    const more = store.loadMore(); // reqSeq bumped, awaiting the pending page
+    await store.deleteAllMessages(); // bumps reqSeq and wipes the list
+    expect(store.rows.length).toBe(0);
+
+    resolveMore(makePage([makeSummary('c')], 10));
+    await more;
+    // The stale loadMore must NOT re-populate after the wipe.
+    expect(store.rows.length).toBe(0);
+    expect(store.total).toBe(0);
   });
 });

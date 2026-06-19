@@ -50,8 +50,15 @@ export function decodePart(
     try {
       binStr = atob(stripped);
     } catch {
-      // AIDEV-NOTE: If atob fails (malformed base64), return the raw body as a fallback.
-      // This is safer than throwing to the UI — the user sees garbled text rather than an error page.
+      // AIDEV-NOTE: If atob fails (malformed base64), fall back to showing the raw body
+      // rather than an error page. But still honor the size cap: the pre-decode estimate
+      // above is computed on the WHITESPACE-STRIPPED length, so a body padded with lots of
+      // whitespace (or a near-cap body with one stray non-base64 char) can reach here with
+      // a raw `body` far larger than maxBytes. Without this guard a single malformed part
+      // could push tens of MB into the preview/linkify path and freeze the reader tab.
+      if (body.length > maxBytes) {
+        throw new PartTooLargeError(body.length, maxBytes);
+      }
       return `[base64 decode error — raw content follows]\n${body}`;
     }
 
@@ -286,16 +293,7 @@ function rewriteRemoteImages(doc: Document, proxyUrl: (url: string) => string): 
 
   doc.querySelectorAll('[srcset]').forEach((el) => {
     const srcset = el.getAttribute('srcset') ?? '';
-    const rewritten = srcset
-      .split(',')
-      .map((entry) => {
-        const parts = entry.trim().split(/\s+/);
-        if (parts.length > 0 && isRemote(parts[0])) {
-          parts[0] = proxyUrl(parts[0]);
-        }
-        return parts.join(' ');
-      })
-      .join(', ');
+    const rewritten = rewriteSrcset(srcset, (u) => (isRemote(u) ? proxyUrl(u) : u));
     if (rewritten !== srcset) el.setAttribute('srcset', rewritten);
   });
 
@@ -307,6 +305,58 @@ function rewriteRemoteImages(doc: Document, proxyUrl: (url: string) => string): 
     );
     if (rewritten !== style) el.setAttribute('style', rewritten);
   });
+}
+
+// AIDEV-NOTE: Rewrite a srcset attribute WITHOUT breaking data: URLs. A srcset candidate
+// is "URL [whitespace descriptor]" and candidates are comma-separated, BUT a URL (notably a
+// data: URL) may itself contain commas. Splitting naively on ',' therefore corrupts data:
+// candidates (and re-serializes them with a stray space even when nothing needed rewriting).
+// Per the HTML srcset grammar the URL is the leading run of non-whitespace, so we parse
+// positionally: read the URL token (stripping trailing commas that end a descriptor-less
+// candidate), then the descriptor up to the next comma. Each URL is passed to `rewrite`.
+function rewriteSrcset(value: string, rewrite: (url: string) => string): string {
+  const isWs = (c: string): boolean => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f';
+  const candidates: string[] = [];
+  let i = 0;
+  const n = value.length;
+  while (i < n) {
+    while (i < n && (isWs(value[i]) || value[i] === ',')) i++; // skip separators
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !isWs(value[i])) i++; // URL = run of non-whitespace
+    let url = value.slice(start, i);
+    let trailingCommas = false;
+    while (url.endsWith(',')) {
+      url = url.slice(0, -1);
+      trailingCommas = true;
+    }
+    let descriptor = '';
+    if (!trailingCommas) {
+      while (i < n && isWs(value[i])) i++;
+      const dStart = i;
+      // AIDEV-NOTE: per the WHATWG/Blink srcset descriptor tokenizer a comma inside a (...)
+      // descriptor is NOT a candidate separator. Use a BOOLEAN in-parens state, NOT a depth
+      // counter: the browser leaves the "in parens" state on the FIRST ')' regardless of
+      // nesting, so a depth counter diverges from browsers on nested/multiple '(' (e.g.
+      // "1x(a(b)c") — there the real browser treats the following comma as a separator and
+      // loads the next candidate, while a depth counter would swallow it into the descriptor
+      // and leave that next URL un-rewritten (remote → emitted un-proxied = privacy leak;
+      // cid: → broken inline image). Match the browser exactly to keep the rewrite sound.
+      let inParens = false;
+      while (i < n) {
+        const ch = value[i];
+        if (ch === ',' && !inParens) break;
+        if (ch === '(') inParens = true;
+        else if (ch === ')') inParens = false;
+        i++;
+      }
+      descriptor = value.slice(dStart, i).trim();
+      if (i < n) i++; // consume the separating comma
+    }
+    const newUrl = rewrite(url);
+    candidates.push(descriptor ? `${newUrl} ${descriptor}` : newUrl);
+  }
+  return candidates.join(', ');
 }
 
 /**
@@ -332,19 +382,11 @@ function rewriteCidRefs(
     });
   }
 
-  // Process srcset (comma-separated list of "url [descriptor]" entries)
+  // Process srcset (comma-separated list of "url [descriptor]" entries; data: URLs
+  // contain commas, so use the positional tokenizer rather than splitting on ',').
   doc.querySelectorAll('[srcset]').forEach((el) => {
     const srcset = el.getAttribute('srcset') ?? '';
-    const rewritten = srcset
-      .split(',')
-      .map((entry) => {
-        const parts = entry.trim().split(/\s+/);
-        if (parts.length > 0) {
-          parts[0] = rewriteCidUrl(parts[0], msgId, cidUrlFn);
-        }
-        return parts.join(' ');
-      })
-      .join(', ');
+    const rewritten = rewriteSrcset(srcset, (u) => rewriteCidUrl(u, msgId, cidUrlFn));
     if (rewritten !== srcset) {
       el.setAttribute('srcset', rewritten);
     }
