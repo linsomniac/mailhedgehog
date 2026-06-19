@@ -148,7 +148,20 @@
     srcdocError = null;
     plainTokens = [];
     plainError = null;
-    const hasHtml = !!getHtml(message);
+    // AIDEV-NOTE: getHtml() can throw PartTooLargeError when the text/html MIME part
+    // body exceeds the 4 MB cap (decodePart). We catch it here and treat it as
+    // hasHtml=true so the component routes to the HTML tab, where buildHtmlTab() already
+    // handles PartTooLargeError and renders the graceful "too large to preview" notice
+    // (srcdocError = 'too-large'). Without this catch the throw would escape the $effect
+    // and crash the reader for any large HTML email.
+    let hasHtml: boolean;
+    try {
+      hasHtml = !!getHtml(message);
+    } catch {
+      // getHtml can throw PartTooLargeError for >4 MB HTML parts; route to the HTML
+      // tab, whose buildHtmlTab() renders the graceful "too large to preview" notice.
+      hasHtml = true;
+    }
     activeTab = hasHtml ? 'html' : 'plain';
     if (hasHtml) {
       buildHtmlTab();

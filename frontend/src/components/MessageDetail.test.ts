@@ -435,6 +435,60 @@ describe('MessageDetail: MIME parts tab', () => {
 });
 
 // ---------------------------------------------------------------------------
+// I1 regression: PartTooLargeError from getHtml() in initial-tab $effect
+// ---------------------------------------------------------------------------
+
+describe('MessageDetail: large HTML email does not crash (I1 regression)', () => {
+  // AIDEV-NOTE: This test guards against the I1 regression where getHtml() in the
+  // initial-tab $effect was called outside any try/catch. For HTML parts > 4 MB
+  // (no Content-Transfer-Encoding, so the raw body is decoded directly), decodePart()
+  // throws PartTooLargeError. The fix wraps the detection in try/catch so the throw
+  // routes to the HTML tab, where buildHtmlTab() shows the graceful too-large notice.
+  it('shows the too-large notice instead of crashing for a >4MB HTML body', async () => {
+    // Build a FullMessage with a text/html MIME part whose raw Body exceeds 4 MB.
+    // No Content-Transfer-Encoding → decodePart() reads the body directly and throws
+    // PartTooLargeError before returning. The component MUST NOT propagate this throw.
+    const bigHtmlBody = 'x'.repeat(4_200_000);
+    const largeHtmlMsg = makeFullMessage({
+      Content: {
+        Headers: { 'Content-Type': ['multipart/alternative'] },
+        Body: '',
+        Size: 0,
+        MIME: null,
+      },
+      MIME: {
+        Parts: [
+          {
+            Headers: { 'Content-Type': ['text/plain; charset=utf-8'] },
+            Body: 'plain fallback',
+            Size: 14,
+            MIME: null,
+          },
+          {
+            // No Content-Transfer-Encoding — raw body decode path triggers PartTooLargeError
+            Headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+            Body: bigHtmlBody,
+            Size: bigHtmlBody.length,
+            MIME: null,
+          },
+        ],
+      },
+    });
+
+    // Rendering must not throw even though getHtml() will throw PartTooLargeError
+    render(MessageDetail, { props: { message: largeHtmlMsg } });
+
+    // The HTML tab should be active and show the graceful too-large notice
+    await waitFor(() => {
+      expect(screen.getByText(/too large to preview/i)).toBeTruthy();
+    });
+
+    // Must not show plain tab panel (was not routed to plain)
+    expect(screen.queryByTestId('panel-plain')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
