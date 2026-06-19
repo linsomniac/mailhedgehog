@@ -140,9 +140,8 @@ describe('MessageDetail: tab rendering', () => {
     expect(screen.getByTestId('tab-parts')).toBeTruthy();
   });
 
-  it('shows the HTML panel by default', () => {
-    const msg = makeFullMessage();
-    render(MessageDetail, { props: { message: msg } });
+  it('shows the HTML panel by default when an HTML part exists', () => {
+    render(MessageDetail, { props: { message: makeHtmlMessage() } });
     expect(screen.getByTestId('panel-html')).toBeTruthy();
   });
 
@@ -219,10 +218,18 @@ describe('MessageDetail: HTML tab iframe security', () => {
     });
   });
 
-  it('shows no-html-part message when message has no HTML part', async () => {
-    const msg = makeFullMessage(); // plain only
-    render(MessageDetail, { props: { message: msg } });
+  it('opens on the Plain tab when the message has no HTML part', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } }); // plain only
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-plain')).toBeTruthy();
+      expect(screen.getByText(/Hello, plain text world!/)).toBeTruthy();
+    });
+    expect(screen.queryByTestId('panel-html')).toBeNull();
+  });
 
+  it('still shows the no-html notice if the user manually opens HTML on a plain-only message', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } });
+    await fireEvent.click(screen.getByTestId('tab-html'));
     await waitFor(() => {
       expect(screen.getByText(/No HTML part found/)).toBeTruthy();
     });
@@ -428,6 +435,60 @@ describe('MessageDetail: MIME parts tab', () => {
 });
 
 // ---------------------------------------------------------------------------
+// I1 regression: PartTooLargeError from getHtml() in initial-tab $effect
+// ---------------------------------------------------------------------------
+
+describe('MessageDetail: large HTML email does not crash (I1 regression)', () => {
+  // AIDEV-NOTE: This test guards against the I1 regression where getHtml() in the
+  // initial-tab $effect was called outside any try/catch. For HTML parts > 4 MB
+  // (no Content-Transfer-Encoding, so the raw body is decoded directly), decodePart()
+  // throws PartTooLargeError. The fix wraps the detection in try/catch so the throw
+  // routes to the HTML tab, where buildHtmlTab() shows the graceful too-large notice.
+  it('shows the too-large notice instead of crashing for a >4MB HTML body', async () => {
+    // Build a FullMessage with a text/html MIME part whose raw Body exceeds 4 MB.
+    // No Content-Transfer-Encoding → decodePart() reads the body directly and throws
+    // PartTooLargeError before returning. The component MUST NOT propagate this throw.
+    const bigHtmlBody = 'x'.repeat(4_200_000);
+    const largeHtmlMsg = makeFullMessage({
+      Content: {
+        Headers: { 'Content-Type': ['multipart/alternative'] },
+        Body: '',
+        Size: 0,
+        MIME: null,
+      },
+      MIME: {
+        Parts: [
+          {
+            Headers: { 'Content-Type': ['text/plain; charset=utf-8'] },
+            Body: 'plain fallback',
+            Size: 14,
+            MIME: null,
+          },
+          {
+            // No Content-Transfer-Encoding — raw body decode path triggers PartTooLargeError
+            Headers: { 'Content-Type': ['text/html; charset=utf-8'] },
+            Body: bigHtmlBody,
+            Size: bigHtmlBody.length,
+            MIME: null,
+          },
+        ],
+      },
+    });
+
+    // Rendering must not throw even though getHtml() will throw PartTooLargeError
+    render(MessageDetail, { props: { message: largeHtmlMsg } });
+
+    // The HTML tab should be active and show the graceful too-large notice
+    await waitFor(() => {
+      expect(screen.getByText(/too large to preview/i)).toBeTruthy();
+    });
+
+    // Must not show plain tab panel (was not routed to plain)
+    expect(screen.queryByTestId('panel-plain')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
@@ -446,5 +507,30 @@ describe('MessageDetail: actions', () => {
 
     await fireEvent.click(screen.getByText('Delete'));
     expect(mockStore.deleteOne).toHaveBeenCalledWith('test-msg-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Close button + dark mode
+// ---------------------------------------------------------------------------
+
+describe('MessageDetail — close + dark', () => {
+  it('renders a close button that calls onClose', async () => {
+    const onClose = vi.fn();
+    render(MessageDetail, { props: { message: makeFullMessage(), onClose } });
+    await fireEvent.click(screen.getByTestId('reader-close'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not crash when onClose is omitted', async () => {
+    render(MessageDetail, { props: { message: makeFullMessage() } });
+    await fireEvent.click(screen.getByTestId('reader-close')); // no throw
+    expect(screen.getByTestId('message-detail')).toBeTruthy();
+  });
+
+  it('root carries dark: color variants', () => {
+    const { container } = render(MessageDetail, { props: { message: makeFullMessage() } });
+    const root = container.querySelector('[data-testid="message-detail"]') as HTMLElement;
+    expect(root.className).toContain('dark:');
   });
 });

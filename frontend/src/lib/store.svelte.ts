@@ -19,6 +19,25 @@ import * as api from './api.js';
 export const PAGE = 50;
 const LRU_CAP = 50;
 
+// AIDEV-NOTE: List-pane width for the resizable reader split. Persisted across reloads,
+// clamped to [MIN_LIST_WIDTH, 60% viewport]; defaults to 40% viewport. Pure helper so it
+// is deterministically testable without touching window/localStorage.
+export const MIN_LIST_WIDTH = 320;
+const LIST_MAX_FRACTION = 0.6;
+const LIST_DEFAULT_FRACTION = 0.4;
+const LIST_WIDTH_KEY = 'mhg-list-width';
+
+export function clampListWidth(px: number, viewport: number): number {
+  const max = Math.max(MIN_LIST_WIDTH, Math.floor(viewport * LIST_MAX_FRACTION));
+  const fallback = Math.min(max, Math.max(MIN_LIST_WIDTH, Math.floor(viewport * LIST_DEFAULT_FRACTION)));
+  if (!Number.isFinite(px)) return fallback;
+  return Math.min(max, Math.max(MIN_LIST_WIDTH, Math.floor(px)));
+}
+
+function viewportWidth(): number {
+  return typeof window !== 'undefined' ? window.innerWidth : 1280;
+}
+
 // AIDEV-NOTE: LRU cache using Map insertion-order. delete+set on access refreshes recency.
 // Evicts the oldest (first) entry when size exceeds LRU_CAP.
 function lruSet(cache: Map<string, FullMessage>, id: string, msg: FullMessage): void {
@@ -65,6 +84,10 @@ function createStore() {
   let searchActive = $state(false);
   let searchKind = $state('');
   let searchQuery = $state('');
+
+  // AIDEV-NOTE: List-pane width for the resizable reader split. Initialized to the
+  // viewport-relative default; loadListWidth() rehydrates from localStorage at startup.
+  let listWidth = $state(clampListWidth(NaN, viewportWidth()));
 
   // AIDEV-NOTE: Detail cache is NOT $state because its mutation pattern (delete+set for LRU)
   // doesn't integrate cleanly with Svelte's proxy tracking and isn't needed for reactivity —
@@ -250,6 +273,26 @@ function createStore() {
     atTop = value;
   }
 
+  function setListWidth(px: number): void {
+    listWidth = clampListWidth(px, viewportWidth());
+    try {
+      localStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+    } catch {
+      /* ignore storage failures (private mode etc.) */
+    }
+  }
+
+  function loadListWidth(): void {
+    let stored = NaN;
+    try {
+      const v = localStorage.getItem(LIST_WIDTH_KEY);
+      if (v != null) stored = parseInt(v, 10);
+    } catch {
+      /* ignore */
+    }
+    listWidth = clampListWidth(stored, viewportWidth());
+  }
+
   // AIDEV-NOTE: resetForTest() is a testing seam that resets ALL state including search
   // and wsStatus. DO NOT call in production code. Used in test beforeEach to ensure
   // the singleton store starts each test in a known clean state.
@@ -268,6 +311,7 @@ function createStore() {
     searchActive = false;
     searchKind = '';
     searchQuery = '';
+    listWidth = clampListWidth(NaN, viewportWidth());
   }
 
   // AIDEV-NOTE: Expose state as getters so the reactive $state values are readable
@@ -287,6 +331,9 @@ function createStore() {
     get search() {
       return { active: searchActive, kind: searchKind, query: searchQuery };
     },
+    get listWidth() { return listWidth; },
+    setListWidth,
+    loadListWidth,
     loadConfig,
     loadFirst,
     loadMore,

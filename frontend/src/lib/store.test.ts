@@ -7,6 +7,7 @@
 // the browser resolve condition so Svelte 5 client-side runes are active.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { clampListWidth, MIN_LIST_WIDTH } from './store.svelte.js';
 
 // AIDEV-NOTE: We must mock the api module BEFORE importing the store,
 // because the store imports api at module load time.
@@ -610,5 +611,49 @@ describe('setWsStatus() and setAtTop()', () => {
     expect(store.atTop).toBe(false);
     store.setAtTop(true);
     expect(store.atTop).toBe(true);
+  });
+});
+
+describe('clampListWidth', () => {
+  it('never returns below MIN_LIST_WIDTH', () => {
+    expect(clampListWidth(100, 2000)).toBe(MIN_LIST_WIDTH);
+  });
+  it('never exceeds 60% of the viewport', () => {
+    expect(clampListWidth(5000, 1000)).toBe(600);
+  });
+  it('passes through an in-range value (floored)', () => {
+    expect(clampListWidth(450.7, 2000)).toBe(450);
+  });
+  it('returns the 40% default for non-finite input', () => {
+    expect(clampListWidth(NaN, 1000)).toBe(400);
+  });
+  it('min wins when 60% of a tiny viewport is below MIN', () => {
+    expect(clampListWidth(400, 400)).toBe(MIN_LIST_WIDTH);
+  });
+});
+
+describe('store.listWidth', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    store.resetForTest();
+  });
+  it('defaults to ~40% of the viewport', () => {
+    // jsdom default innerWidth is 1024 → floor(1024*0.4) = 409
+    expect(store.listWidth).toBe(clampListWidth(NaN, window.innerWidth));
+  });
+  it('setListWidth clamps and persists', () => {
+    store.setListWidth(100);
+    expect(store.listWidth).toBe(MIN_LIST_WIDTH);
+    expect(localStorage.getItem('mhg-list-width')).toBe(String(MIN_LIST_WIDTH));
+  });
+  it('loadListWidth re-reads and clamps a stored value', () => {
+    localStorage.setItem('mhg-list-width', '99999');
+    store.loadListWidth();
+    expect(store.listWidth).toBe(clampListWidth(99999, window.innerWidth));
+  });
+  it('resetForTest restores the default', () => {
+    store.setListWidth(500);
+    store.resetForTest();
+    expect(store.listWidth).toBe(clampListWidth(NaN, window.innerWidth));
   });
 });
