@@ -481,3 +481,44 @@ async def test_csp_is_superset_of_email_srcdoc_needs(app_and_store):
     assert "script-src 'self'" in csp
     script_directive = csp.split("script-src")[1].split(";")[0]
     assert "'unsafe-inline'" not in script_directive
+
+
+async def test_csp_blocks_remote_resources_in_proxy_mode():
+    """SECURITY/REGRESSION: with MH_PROXY_REMOTE_IMAGES on, the inherited srcdoc CSP
+    must forbid direct remote img/style/font/media so that CSS-sourced url() images and
+    remote <link> stylesheets (which the frontend does NOT rewrite) are BLOCKED rather
+    than leaking around the same-origin proxy. Proxied attribute images still load via
+    'self'. See web.py _CSP AIDEV-NOTE."""
+    config = Config(smtp_port=0, http_port=0, proxy_remote_images=True)
+    store = MessageStore(config.max_messages, config.max_bytes)
+    app = create_app(config, store)
+    client = app.test_client()
+    resp = await client.get("/")
+    csp = resp.headers.get("Content-Security-Policy", "")
+
+    # No directive may permit direct remote (https:/http:) fetches in proxy mode.
+    assert "https:" not in csp
+    assert "http:" not in csp
+    # Same-origin proxied images + inline data/blob still work, and inline styles too.
+    assert "img-src 'self' data: blob:" in csp
+    assert "style-src 'self' 'unsafe-inline'" in csp
+    assert "font-src 'self' data:" in csp
+    assert "media-src 'self'" in csp
+    # Script/object/base/frame protections are unchanged.
+    assert "script-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'none'" in csp
+    assert "frame-ancestors 'self'" in csp
+
+
+async def test_csp_permits_remote_resources_by_default():
+    """In the default (non-proxy) mode, remote content loads directly by design, so the
+    CSP permits remote img/style/font/media (the inherited-CSP superset emails need)."""
+    config = Config(smtp_port=0, http_port=0, proxy_remote_images=False)
+    store = MessageStore(config.max_messages, config.max_bytes)
+    app = create_app(config, store)
+    client = app.test_client()
+    resp = await client.get("/")
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "img-src 'self' data: blob: https: http:" in csp
+    assert "style-src 'self' 'unsafe-inline' https: http:" in csp
