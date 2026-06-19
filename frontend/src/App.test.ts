@@ -27,7 +27,6 @@ vi.mock('./lib/store.svelte.js', () => ({
     resync: vi.fn().mockResolvedValue(undefined),
     setWsStatus: vi.fn(),
     setAtTop: vi.fn(),
-    setTheme: vi.fn(),
     select: vi.fn().mockResolvedValue(null),
     clearSelect: vi.fn(),
     deleteOne: vi.fn(),

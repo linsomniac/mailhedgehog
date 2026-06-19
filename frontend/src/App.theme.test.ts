@@ -32,7 +32,6 @@ vi.mock('./lib/store.svelte.js', () => ({
     resync: vi.fn().mockResolvedValue(undefined),
     setWsStatus: vi.fn(),
     setAtTop: vi.fn(),
-    setTheme: vi.fn(),
     select: vi.fn().mockResolvedValue(null),
     clearSelect: vi.fn(),
     deleteOne: vi.fn(),
@@ -79,7 +78,6 @@ function mockMatchMedia(prefersDark: boolean): void {
 const THEME_KEY = 'mhg-theme';
 
 import App from './App.svelte';
-import { store } from './lib/store.svelte.js';
 
 describe('Theme toggle', () => {
   beforeEach(() => {
@@ -162,22 +160,6 @@ describe('Theme toggle', () => {
     await waitFor(() => {
       expect(document.documentElement.classList.contains('dark')).toBe(false);
       expect(localStorage.getItem(THEME_KEY)).toBe('light');
-    });
-  });
-
-  it('publishes the applied theme to the store (for the HTML-email iframe color-scheme)', async () => {
-    mockMatchMedia(false); // start light
-    render(App);
-
-    await waitFor(() => {
-      expect(store.setTheme).toHaveBeenCalledWith(false);
-    });
-
-    const toggle = screen.getByTestId('theme-toggle');
-    await fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(store.setTheme).toHaveBeenCalledWith(true);
     });
   });
 

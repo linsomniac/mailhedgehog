@@ -80,11 +80,6 @@ function createStore() {
   let proxyImages = $state(false);
   let selectError = $state<string | null>(null);
 
-  // AIDEV-NOTE: isDark mirrors the applied app theme (set by App.svelte's theme $effect).
-  // MessageDetail reads it so the HTML-email iframe's color-scheme follows the theme and
-  // rebuilds when the user toggles dark/light. It is presentation-only state.
-  let isDark = $state(false);
-
   // Search state
   let searchActive = $state(false);
   let searchKind = $state('');
@@ -278,10 +273,6 @@ function createStore() {
     atTop = value;
   }
 
-  function setTheme(dark: boolean): void {
-    isDark = dark;
-  }
-
   function setListWidth(px: number): void {
     listWidth = clampListWidth(px, viewportWidth());
     try {
@@ -317,7 +308,6 @@ function createStore() {
     loading = false;
     proxyImages = false;
     selectError = null;
-    isDark = false;
     searchActive = false;
     searchKind = '';
     searchQuery = '';
@@ -338,7 +328,6 @@ function createStore() {
     get loading() { return loading; },
     get proxyImages() { return proxyImages; },
     get selectError() { return selectError; },
-    get isDark() { return isDark; },
     get search() {
       return { active: searchActive, kind: searchKind, query: searchQuery };
     },
@@ -359,7 +348,6 @@ function createStore() {
     deleteAllMessages,
     setWsStatus,
     setAtTop,
-    setTheme,
     // Expose for testing only — do NOT use in production components
     get _detailCache() { return detailCache; },
     resetForTest,
