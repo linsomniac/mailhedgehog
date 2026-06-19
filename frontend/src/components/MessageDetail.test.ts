@@ -40,6 +40,8 @@ const { mockStore } = vi.hoisted(() => {
     selectError: null as string | null,
     wsStatus: 'connected' as 'connected' | 'reconnecting' | 'offline',
     proxyImages: false,
+    isDark: false,
+    setTheme: vi.fn(),
     showPending: vi.fn().mockResolvedValue(undefined),
     setAtTop: vi.fn(),
     loadMore: vi.fn().mockResolvedValue(undefined),
@@ -215,6 +217,38 @@ describe('MessageDetail: HTML tab iframe security', () => {
       expect(iframe).toBeTruthy();
       const sandbox = iframe!.getAttribute('sandbox') ?? '';
       expect(sandbox.toLowerCase()).not.toContain('allow-same-origin');
+    });
+  });
+
+  it('builds the HTML iframe with color-scheme:dark when the app theme is dark', async () => {
+    mockStore.isDark = true;
+    try {
+      render(MessageDetail, { props: { message: makeHtmlMessage() } });
+      await waitFor(() => {
+        const iframe = document.querySelector(
+          'iframe[data-testid="html-iframe"]',
+        ) as HTMLIFrameElement | null;
+        expect(iframe).toBeTruthy();
+        expect(iframe!.getAttribute('srcdoc') ?? '').toContain(
+          '<meta name="color-scheme" content="dark">',
+        );
+      });
+    } finally {
+      mockStore.isDark = false;
+    }
+  });
+
+  it('builds the HTML iframe with color-scheme:light when the app theme is light', async () => {
+    mockStore.isDark = false;
+    render(MessageDetail, { props: { message: makeHtmlMessage() } });
+    await waitFor(() => {
+      const iframe = document.querySelector(
+        'iframe[data-testid="html-iframe"]',
+      ) as HTMLIFrameElement | null;
+      expect(iframe).toBeTruthy();
+      expect(iframe!.getAttribute('srcdoc') ?? '').toContain(
+        '<meta name="color-scheme" content="light">',
+      );
     });
   });
 

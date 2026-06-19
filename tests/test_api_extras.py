@@ -428,6 +428,10 @@ async def test_after_request_csp_header_on_index(app_and_store):
     expected_csp = (
         "default-src 'self'; "
         "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https: http:; "
+        "img-src 'self' data: blob: https: http:; "
+        "font-src 'self' data: https: http:; "
+        "media-src 'self' https: http:; "
         "object-src 'none'; "
         "base-uri 'none'; "
         "frame-ancestors 'self'"
@@ -447,8 +451,33 @@ async def test_after_request_csp_header_on_api_response(app_and_store):
     expected_csp = (
         "default-src 'self'; "
         "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https: http:; "
+        "img-src 'self' data: blob: https: http:; "
+        "font-src 'self' data: https: http:; "
+        "media-src 'self' https: http:; "
         "object-src 'none'; "
         "base-uri 'none'; "
         "frame-ancestors 'self'"
     )
     assert csp == expected_csp
+
+
+async def test_csp_is_superset_of_email_srcdoc_needs(app_and_store):
+    """SECURITY/REGRESSION: a srcdoc iframe's effective CSP is the intersection of this
+    parent policy and the per-email policy.  If this parent policy is tightened below
+    what an email needs, ALL email CSS and remote images silently break (emails render
+    with unreadable browser defaults).  This pins the superset requirement so such a
+    regression fails loudly.  See web.py _CSP AIDEV-NOTE."""
+    app, _ = app_and_store
+    client = app.test_client()
+    resp = await client.get("/")
+    csp = resp.headers.get("Content-Security-Policy", "")
+    # Inline styles (email <style> blocks and style="" attributes) must be permitted.
+    assert "style-src" in csp and "'unsafe-inline'" in csp
+    # Remote images/fonts/media referenced by emails must be loadable.
+    assert "img-src" in csp and "https:" in csp
+    # Scripts stay same-origin only: the app shell never runs inline/remote scripts, and
+    # the untrusted email never runs scripts at all (its own srcdoc CSP forbids it).
+    assert "script-src 'self'" in csp
+    script_directive = csp.split("script-src")[1].split(";")[0]
+    assert "'unsafe-inline'" not in script_directive
