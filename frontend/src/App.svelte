@@ -23,6 +23,7 @@
 
   import MessageList from './components/MessageList.svelte';
   import MessageDetail from './components/MessageDetail.svelte';
+  import Splitter from './components/Splitter.svelte';
   import SearchBar from './components/SearchBar.svelte';
   import StatusDot from './components/StatusDot.svelte';
   import ConfirmDialog from './components/ConfirmDialog.svelte';
@@ -88,6 +89,28 @@
   // --- Selected message ---
   let selectedMessage = $state<FullMessage | null>(null);
 
+  // --- Resizable split ---
+  let mainEl = $state<HTMLElement | null>(null);
+  const readerOpen = $derived(selectedMessage !== null || store.selectError !== null);
+
+  function closeReader(): void {
+    store.clearSelect();
+    selectedMessage = null;
+  }
+
+  function handleSplitterDrag(clientX: number): void {
+    const left = mainEl?.getBoundingClientRect().left ?? 0;
+    store.setListWidth(clientX - left);
+  }
+
+  function handleSplitterNudge(delta: number): void {
+    store.setListWidth(store.listWidth + delta);
+  }
+
+  function handleWindowKey(e: KeyboardEvent): void {
+    if (e.key === 'Escape' && readerOpen) closeReader();
+  }
+
   async function handleSelect(id: string): Promise<void> {
     const msg = await store.select(id);
     // Only update if the selection hasn't changed while we were awaiting
@@ -118,6 +141,7 @@
   let initialLoadDone = $state(false);
 
   onMount(async () => {
+    store.loadListWidth();
     await store.loadConfig();
     await store.loadFirst();
     initialLoadDone = true;
@@ -159,6 +183,7 @@
 </script>
 
 <!-- AIDEV-NOTE: Apply @custom-variant dark in app.css; here we just add the class to <html> via $effect. -->
+<svelte:window onkeydown={handleWindowKey} />
 <div class="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
 
   <!-- ===== Header ===== -->
@@ -259,12 +284,17 @@
   </header>
 
   <!-- ===== Main body ===== -->
-  <main class="flex-1 flex overflow-hidden" aria-label="Main content">
+  <main bind:this={mainEl} class="flex-1 flex overflow-hidden" aria-label="Main content">
 
-    <!-- Message List panel (left / top) -->
+    <!-- Message List panel. Full-width when nothing is open; a resizable sidebar when reading.
+         container-type drives MessageRow's rich/compact responsive layout. -->
     <section
-      class="flex flex-col border-r border-gray-200 dark:border-gray-700 overflow-hidden
-             {selectedMessage || store.selectError ? 'w-80 shrink-0 hidden md:flex' : 'flex-1'}"
+      class="flex flex-col overflow-hidden {readerOpen
+        ? 'border-r border-gray-200 dark:border-gray-700 shrink-0 hidden md:flex'
+        : 'flex-1'}"
+      style={readerOpen
+        ? `width: ${store.listWidth}px; container-type: inline-size;`
+        : 'container-type: inline-size;'}
       aria-label="Message list"
     >
       {#if initialLoadDone && store.rows.length === 0 && !store.loading}
@@ -277,7 +307,17 @@
       {/if}
     </section>
 
-    <!-- Message Detail panel (right / bottom) -->
+    {#if readerOpen}
+      <Splitter
+        onDrag={handleSplitterDrag}
+        onNudge={handleSplitterNudge}
+        ariaValueNow={store.listWidth}
+        ariaValueMin={320}
+        ariaValueMax={Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.6)}
+      />
+    {/if}
+
+    <!-- Reader panel -->
     {#if store.selectError}
       <section
         class="flex-1 flex items-center justify-center p-8 bg-white dark:bg-gray-900"
@@ -289,7 +329,7 @@
           <button
             type="button"
             class="mt-3 text-sm text-indigo-600 dark:text-indigo-400 underline"
-            onclick={() => { store.clearSelect(); }}
+            onclick={() => { closeReader(); }}
           >
             Go back
           </button>
@@ -300,21 +340,7 @@
         class="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-900"
         aria-label="Message detail"
       >
-        <MessageDetail message={selectedMessage} />
-      </section>
-    {:else}
-      <!-- No selection placeholder — shown on wide viewports -->
-      <section
-        class="flex-1 hidden md:flex items-center justify-center bg-white dark:bg-gray-900 text-gray-400 dark:text-gray-600"
-        aria-label="Message detail"
-        data-testid="no-selection"
-      >
-        <div class="text-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
-          <p class="text-sm">Select a message to read it</p>
-        </div>
+        <MessageDetail message={selectedMessage} onClose={closeReader} />
       </section>
     {/if}
   </main>
