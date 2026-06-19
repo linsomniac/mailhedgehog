@@ -1,7 +1,18 @@
+import threading
+
 import pytest
 
+from mailhedgehog import web as web_module
 from mailhedgehog.config import Config
-from mailhedgehog.parser import parse
+from mailhedgehog.parser import (
+    get_mime_part as _real_get_mime_part,
+)
+from mailhedgehog.parser import (
+    get_mime_part_by_cid as _real_get_mime_part_by_cid,
+)
+from mailhedgehog.parser import (
+    parse,
+)
 from mailhedgehog.storage import MessageStore
 from mailhedgehog.web import create_app
 from tests import sample_emails as s
@@ -49,6 +60,45 @@ async def test_download_mime_part(app_and_store):
     assert (
         await client.get(f"/api/v1/messages/{m['ID']}/mime/part/9/download")
     ).status_code == 404
+
+
+async def test_download_part_decodes_off_event_loop_thread(app_and_store, monkeypatch):
+    # AIDEV-NOTE: get_mime_part reparses/decodes (CPU-bound) and must run via
+    # asyncio.to_thread so a large message can't stall the event loop. Verify the call
+    # lands on a worker thread (different ident) rather than the event-loop thread.
+    app, store = app_and_store
+    m = parse(s.MULTIPART_ATTACHMENT, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_ATTACHMENT)
+    main_tid = threading.get_ident()
+    captured: dict[str, int] = {}
+
+    def spy(*args, **kwargs):
+        captured["tid"] = threading.get_ident()
+        return _real_get_mime_part(*args, **kwargs)
+
+    monkeypatch.setattr(web_module, "get_mime_part", spy)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/part/1/download")
+    assert resp.status_code == 200
+    assert captured["tid"] != main_tid
+
+
+async def test_download_cid_decodes_off_event_loop_thread(app_and_store, monkeypatch):
+    app, store = app_and_store
+    m = parse(s.MULTIPART_RELATED_WITH_CID, "a@x.test", ["b@x.test"], "h")
+    store.add(m, s.MULTIPART_RELATED_WITH_CID)
+    main_tid = threading.get_ident()
+    captured: dict[str, int] = {}
+
+    def spy(*args, **kwargs):
+        captured["tid"] = threading.get_ident()
+        return _real_get_mime_part_by_cid(*args, **kwargs)
+
+    monkeypatch.setattr(web_module, "get_mime_part_by_cid", spy)
+    client = app.test_client()
+    resp = await client.get(f"/api/v1/messages/{m['ID']}/mime/cid/logo/download")
+    assert resp.status_code == 200
+    assert captured["tid"] != main_tid
 
 
 async def test_download_evil_filename(app_and_store):

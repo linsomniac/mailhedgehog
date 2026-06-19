@@ -30,8 +30,16 @@ class SmtpHandler:
         )
         rcpts = list(envelope.rcpt_tos)
         helo = session.host_name
+        # AIDEV-NOTE: parse() is CPU-bound (message_from_bytes + recursive MIME walk +
+        # per-part base64/QP decode) and the SMTP server shares the Quart/Hypercorn
+        # event loop, so parsing a large message inline would head-of-line-block all
+        # HTTP/WS/SMTP for its duration. Offload it to a worker thread, mirroring the
+        # search route (web.py uses asyncio.to_thread for the same reason). store.add()
+        # stays on the loop: it only touches tiny header strings (~microseconds).
         try:
-            message = parse(raw, envelope.mail_from, rcpts, helo)
+            message = await asyncio.to_thread(
+                parse, raw, envelope.mail_from, rcpts, helo
+            )
         except Exception as exc:  # noqa: BLE001 - intentional catch-all for a sink
             message = unparseable_message(
                 raw, envelope.mail_from, rcpts, helo, str(exc)

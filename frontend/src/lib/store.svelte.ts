@@ -19,6 +19,14 @@ import * as api from './api.js';
 export const PAGE = 50;
 const LRU_CAP = 50;
 
+// AIDEV-NOTE: Hard client-side cap on retained rows. The server is FIFO-bounded
+// (max_messages, default 100), but applyLive() prepends every live arrival while the user
+// sits at the top, which would otherwise grow rows/seen without bound over a long session
+// (the unbounded client cache this rewrite set out to eliminate). MAX_ROWS is set well
+// above any realistic at-top burst and the virtualizer's window so it never fights normal
+// scroll-back; rows beyond it are the oldest and are dropped from the tail.
+export const MAX_ROWS = 5000;
+
 // AIDEV-NOTE: List-pane width for the resizable reader split. Persisted across reloads,
 // clamped to [MIN_LIST_WIDTH, 60% viewport]; defaults to 40% viewport. Pure helper so it
 // is deterministically testable without touching window/localStorage.
@@ -94,6 +102,13 @@ function createStore() {
   // callers await select() which returns the message directly.
   const detailCache = new Map<string, FullMessage>();
 
+  // AIDEV-NOTE: reqSeq is a monotonic token for list-loading requests (loadFirst / resync /
+  // loadMore). Each captures `++reqSeq` before awaiting and only commits if it is still the
+  // latest when it resolves. This prevents a slow older response (e.g. a stale search or a
+  // pre-clear list) from overwriting newer state, and lets deleteAll invalidate an in-flight
+  // loadMore. Not $state — it is never read reactively.
+  let reqSeq = 0;
+
   // --- Internal helpers ---
 
   function currentFetch(start: number, limit: number): Promise<import('./types.js').Page<Summary>> {
@@ -101,6 +116,16 @@ function createStore() {
       return api.searchMessages(searchKind, searchQuery, start, limit);
     }
     return api.listMessages(start, limit);
+  }
+
+  // AIDEV-NOTE: drop oldest (tail) rows beyond `limit`, keeping `seen` in sync. rows is
+  // newest-first, so the tail is the oldest. Used to enforce MAX_ROWS (applyLive) and to
+  // reconcile when the server reports a total below what we hold (loadMore eviction).
+  function trimTailTo(limit: number): void {
+    if (rows.length <= limit) return;
+    const dropped = rows.slice(limit);
+    rows = rows.slice(0, limit);
+    for (const d of dropped) seen.delete(d.ID);
   }
 
   // AIDEV-NOTE: loadConfig fetches the server bootstrap config once at startup.
@@ -119,8 +144,10 @@ function createStore() {
   // Called on init, setSearch, clearSearch, and after deleteAll.
   async function loadFirst(): Promise<void> {
     loading = true;
+    const my = ++reqSeq;
     try {
       const page = await currentFetch(0, PAGE);
+      if (my !== reqSeq) return; // a newer load/reset superseded this one
       rows = page.items;
       seen = new Set(page.items.map((s) => s.ID));
       total = page.total;
@@ -135,8 +162,10 @@ function createStore() {
   async function loadMore(): Promise<void> {
     if (loading || rows.length >= total) return;
     loading = true;
+    const my = ++reqSeq;
     try {
       const page = await currentFetch(rows.length, PAGE);
+      if (my !== reqSeq) return; // a newer load/reset superseded this one
       total = page.total; // server may have grown or shrunk
       for (const s of page.items) {
         if (!seen.has(s.ID)) {
@@ -144,6 +173,12 @@ function createStore() {
           seen.add(s.ID);
         }
       }
+      // AIDEV-NOTE: we deliberately do NOT tail-trim to `total` here on a shrunk count. A
+      // live message prepended during this fetch's await bumps total/rows, and a tail-trim
+      // would then evict a valid (older) loaded row. The `rows.length >= total` guard above
+      // already stops further growth; reconciliation of server-evicted ghosts is handled
+      // safely elsewhere — resync (WS (re)open / "N new" pill) does a wholesale first-page
+      // replace, and select()'s 404 path removes a ghost when the user opens it.
     } finally {
       loading = false;
     }
@@ -159,6 +194,7 @@ function createStore() {
       rows.unshift(summary);
       seen.add(summary.ID);
       total++;
+      trimTailTo(MAX_ROWS); // bound the window so a long at-top session can't leak
     } else {
       pendingNew++;
     }
@@ -173,8 +209,10 @@ function createStore() {
   // evicted messages.
   async function resync(): Promise<void> {
     loading = true;
+    const my = ++reqSeq;
     try {
       const page = await currentFetch(0, PAGE);
+      if (my !== reqSeq) return; // a newer load/reset superseded this one
       rows = page.items;
       seen = new Set(page.items.map((s) => s.ID));
       total = page.total;
@@ -233,7 +271,9 @@ function createStore() {
       const isNotFound =
         err instanceof Error && (err.message.includes('404') || err.message.includes('Not Found'));
       if (isNotFound) {
-        // Remove ghost row
+        // Remove ghost row. Bump reqSeq so an in-flight loadMore (whose fetched page may
+        // still contain this id) early-returns instead of re-adding it after removal.
+        ++reqSeq;
         rows = rows.filter((r) => r.ID !== id);
         seen.delete(id);
         total = Math.max(0, total - 1);
@@ -248,6 +288,7 @@ function createStore() {
 
   async function deleteOne(id: string): Promise<void> {
     await api.deleteMessage(id);
+    ++reqSeq; // invalidate an in-flight loadMore so it can't re-add this deleted row
     rows = rows.filter((r) => r.ID !== id);
     seen.delete(id);
     total = Math.max(0, total - 1);
@@ -257,6 +298,7 @@ function createStore() {
 
   async function deleteAllMessages(): Promise<void> {
     await api.deleteAll();
+    ++reqSeq; // invalidate any in-flight list load so it can't re-populate after the wipe
     rows = [];
     seen = new Set();
     total = 0;
