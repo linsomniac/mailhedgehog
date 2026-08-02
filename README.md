@@ -20,7 +20,7 @@ Using the published Docker image (no checkout required):
 
 Pre-built multi-arch images (`linux/amd64`, `linux/arm64`) are published to the
 GitHub Container Registry on each tagged release.  Use `:latest` for the newest
-release or pin a version, e.g. `ghcr.io/linsomniac/mailhedgehog:0.9.0`.
+release or pin a version, e.g. `ghcr.io/linsomniac/mailhedgehog:0.9.1`.
 
 Building the Docker image locally:
 
