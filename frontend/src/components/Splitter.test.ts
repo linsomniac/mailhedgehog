@@ -18,15 +18,18 @@ beforeAll(() => {
 });
 
 import { render, screen, fireEvent } from '@testing-library/svelte';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import Splitter from './Splitter.svelte';
 
-let onDrag: ReturnType<typeof vi.fn>;
-let onNudge: ReturnType<typeof vi.fn>;
+// AIDEV-NOTE: Mocks are explicitly typed to match Splitter's Props. Since vitest 5,
+// an untyped vi.fn() is Mock<Procedure | Constructable>, which svelte-check rejects
+// when passed as a (x: number) => void prop.
+let onDrag: Mock<(clientX: number) => void>;
+let onNudge: Mock<(deltaPx: number) => void>;
 
 beforeEach(() => {
-  onDrag = vi.fn();
-  onNudge = vi.fn();
+  onDrag = vi.fn<(clientX: number) => void>();
+  onNudge = vi.fn<(deltaPx: number) => void>();
 });
 
 function renderSplitter() {

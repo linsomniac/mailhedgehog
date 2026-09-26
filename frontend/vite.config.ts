@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
@@ -8,6 +9,8 @@ import { svelteTesting } from '@testing-library/svelte/vite';
 // Stable (non-hashed) filenames so git diffs stay clean.
 // svelteTesting plugin sets the 'browser' resolve condition so Svelte 5 client
 // code is used during vitest runs (avoids "mount is not available on server" errors).
+// The vitest/config reference adds the `test` key to Vite's UserConfig type
+// (vitest 5 no longer augments it implicitly).
 export default defineConfig({
   base: '/static/app/',
   plugins: [
